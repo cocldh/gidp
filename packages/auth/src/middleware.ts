@@ -65,23 +65,25 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig = {}) {
 
     const path = request.nextUrl.pathname;
     const isPublic = publicPaths.some((prefix) => path.startsWith(prefix));
-    // Next.js 는 middleware 에서 request.nextUrl.pathname 의 basePath 를
-    // 자동 strip 함. return_to 는 브라우저가 보고 있던 전체 경로여야 하므로
-    // basePath 를 다시 prepend 해서 zone 경로를 보존.
+    // Next.js middleware 는 basePath 를 request.nextUrl.pathname 에서 자동
+    // strip 함. return_to 는 브라우저가 보고 있던 전체 경로 (basePath 포함)
+    // 여야 하므로 basePath 를 다시 prepend.
     const basePath = request.nextUrl.basePath ?? '';
     const returnToPath = basePath + request.nextUrl.pathname + request.nextUrl.search;
 
-    // Location 을 상대 경로로 내보내면 브라우저가 **현재 보고 있는 origin**
-    // (shell 의 public 도메인) 기준으로 resolve 함. zone 이 reverse-proxy
-    // 뒤에 있을 때 `new URL(path, request.nextUrl)` 로 절대 URL 을 쓰면
-    // zone 내부 origin (e.g. https://gidp-iss.vercel.app) 이 Location 에
-    // 박혀서 shell 을 거치지 않고 cross-origin navigation → 해당 경로가
-    // 없는 zone 에서 404 가 남. 상대 경로는 이 문제를 원천 차단.
-    const redirectTo = (target: string) => {
-      const res = new NextResponse(null, { status: 307 });
-      res.headers.set('Location', target);
-      return res;
-    };
+    // Multi-zone 에서 zone 이 reverse-proxy 뒤에 있을 때 request.nextUrl.origin
+    // 은 zone 내부 origin (https://gidp-iss.vercel.app) 이라서 그걸로 Location
+    // 을 만들면 브라우저가 shell 을 거치지 않고 zone 으로 직접 navigation 함.
+    // zone 에 /login 이 없으므로 404. Vercel 의 reverse-proxy 는 원본 Host 를
+    // x-forwarded-host 로 넣어주므로 그걸 우선 사용해서 shell origin 기준으로
+    // redirect 생성.
+    const forwardedHost = request.headers.get('x-forwarded-host');
+    const forwardedProto = request.headers.get('x-forwarded-proto') ?? request.nextUrl.protocol.replace(':', '');
+    const redirectBase = forwardedHost
+      ? `${forwardedProto}://${forwardedHost}`
+      : request.nextUrl.origin;
+    const redirectTo = (target: string) =>
+      NextResponse.redirect(new URL(target, redirectBase));
 
     if (!session && !isPublic) {
       return redirectTo(`${loginPath}?return_to=${encodeURIComponent(returnToPath)}`);
