@@ -4,7 +4,21 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**", "build/**"]
+      "outputs": [".next/**", "!.next/cache/**", "dist/**", "build/**"],
+      "env": [
+        "ISS_ZONE_URL",
+        "INDEX_ZONE_URL",
+        "DRAWINGS_ZONE_URL",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "NEXT_PUBLIC_GIDP_ENV",
+        "NEXT_PUBLIC_ALLOWED_RETURN_HOSTS",
+        "NEXT_PUBLIC_COOKIE_DOMAIN",
+        "NEXT_PUBLIC_ISS_ASSET_PREFIX",
+        "NEXT_PUBLIC_INDEX_ASSET_PREFIX",
+        "NEXT_PUBLIC_DRAWINGS_ASSET_PREFIX"
+      ]
     },
     "dev": {
       "cache": false,
