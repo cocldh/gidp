@@ -65,15 +65,23 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig = {}) {
 
     const path = request.nextUrl.pathname;
     const isPublic = publicPaths.some((prefix) => path.startsWith(prefix));
-    const returnToPath = request.nextUrl.pathname + request.nextUrl.search;
+    // Next.js 는 middleware 에서 request.nextUrl.pathname 의 basePath 를
+    // 자동 strip 함. return_to 는 브라우저가 보고 있던 전체 경로여야 하므로
+    // basePath 를 다시 prepend 해서 zone 경로를 보존.
+    const basePath = request.nextUrl.basePath ?? '';
+    const returnToPath = basePath + request.nextUrl.pathname + request.nextUrl.search;
 
-    // Next.js middleware requires an absolute URL in Location. We construct it
-    // from request.nextUrl so the redirect resolves against the *public* origin
-    // the browser actually sent (e.g. http://localhost:3000), not a zone's
-    // internal origin. In multi-zone production, if a zone's middleware ever
-    // needs to redirect cross-origin, pass the public origin via a header/env.
-    const redirectTo = (path: string) =>
-      NextResponse.redirect(new URL(path, request.nextUrl));
+    // Location 을 상대 경로로 내보내면 브라우저가 **현재 보고 있는 origin**
+    // (shell 의 public 도메인) 기준으로 resolve 함. zone 이 reverse-proxy
+    // 뒤에 있을 때 `new URL(path, request.nextUrl)` 로 절대 URL 을 쓰면
+    // zone 내부 origin (e.g. https://gidp-iss.vercel.app) 이 Location 에
+    // 박혀서 shell 을 거치지 않고 cross-origin navigation → 해당 경로가
+    // 없는 zone 에서 404 가 남. 상대 경로는 이 문제를 원천 차단.
+    const redirectTo = (target: string) => {
+      const res = new NextResponse(null, { status: 307 });
+      res.headers.set('Location', target);
+      return res;
+    };
 
     if (!session && !isPublic) {
       return redirectTo(`${loginPath}?return_to=${encodeURIComponent(returnToPath)}`);
