@@ -21,3 +21,5 @@ frontend/.env.local
 
 # Migration script (contains API keys)
 migrate_to_supabase.py
+
+.vercel

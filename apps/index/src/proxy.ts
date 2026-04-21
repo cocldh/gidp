@@ -8,5 +8,8 @@ export const proxy = createAuthMiddleware({
 });
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  // basePath 가 /index 라 요청 경로는 /index/_next/... 로 들어옴. 두 형태 모두 bypass.
+  matcher: [
+    '/((?!_next/static|_next/image|index/_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
 };
