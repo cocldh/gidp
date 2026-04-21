@@ -1,0 +1,11 @@
+# 모든 텍스트 파일 줄바꿈 자동 통일 (LF)
+* text=auto eol=lf
+
+# 바이너리 파일
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

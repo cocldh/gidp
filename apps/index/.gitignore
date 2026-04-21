@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+backend/venv/
+backend/excel_manager.db
+*.xlsb
+*.xlsx
+
+# Node
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+
+# Env
+.env.local
+frontend/.env.local
+
+# Vercel
+.vercel
+
+# Migration script (contains API keys)
+migrate_to_supabase.py

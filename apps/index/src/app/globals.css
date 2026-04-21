@@ -1,0 +1,108 @@
+@import "tailwindcss";
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #f7f4ef;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html, body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Calibri", Arial, sans-serif;
+}
+
+.ag-theme-alpine {
+  --ag-font-family: "Calibri", Arial, sans-serif;
+}
+
+/* Dark mode overrides */
+html.dark {
+  --background: #0f172a;
+  --foreground: #e2e8f0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+html.dark body {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+/* Scrollbar - Light */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Scrollbar - Dark */
+html.dark ::-webkit-scrollbar-track { background: #1e293b; }
+html.dark ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+.dark .ag-theme-alpine {
+  --ag-background-color: #1e293b;
+  --ag-header-background-color: #1e293b;
+  --ag-odd-row-background-color: #263348;
+  --ag-row-hover-color: #334155;
+  --ag-border-color: #334155;
+  --ag-header-foreground-color: #94a3b8;
+  --ag-foreground-color: #e2e8f0;
+  --ag-selected-row-background-color: #1d4ed8;
+  --ag-secondary-border-color: #334155;
+  --ag-row-border-color: #334155;
+  --ag-header-column-separator-color: #475569;
+}
+
+.dark .ag-theme-alpine .ag-root-wrapper {
+  border-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-header {
+  background-color: #1e293b;
+  color: #94a3b8;
+  border-bottom-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-header-row {
+  background-color: #1e293b;
+  color: #94a3b8;
+}
+
+.dark .ag-theme-alpine .ag-header-cell {
+  background-color: #1e293b;
+  color: #94a3b8;
+  border-right-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-header-cell:hover {
+  background-color: #263348;
+}
+
+.dark .ag-theme-alpine .ag-row {
+  border-bottom-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-cell {
+  border-right-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-paging-panel {
+  background-color: #1e293b;
+  color: #94a3b8;
+  border-top-color: #334155;
+}
+
+.dark .ag-theme-alpine .ag-filter-toolpanel-header,
+.dark .ag-theme-alpine .ag-filter-toolpanel-search,
+.dark .ag-theme-alpine .ag-panel-title-bar {
+  background-color: #1e293b;
+  color: #e2e8f0;
+}
