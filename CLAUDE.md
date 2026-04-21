@@ -71,6 +71,12 @@ open redirect 방지 목적.
 
 각 zone의 `_next/static` 자산은 그 zone origin에서 서빙됩니다. shell의 `zoneRewrites()` 헬퍼가 `prefix/:path*` 매칭으로 `_next` 요청까지 forward. zone은 `assetPrefix`로 zone의 public URL을 설정 가능.
 
+### Vercel 배포 pitfall (과거에 이미 태움)
+
+1. **`/index` rewrite 는 `beforeFiles` 단계여야 함.** Next.js 는 filesystem routing 전에 `index` 를 root `/` 의 alias 로 normalize. `afterFiles` rewrite 는 그 뒤에 실행되므로 `/index` 요청이 shell `app/page.tsx` 로 먼저 매칭되고 zone 으로 넘어가지 않음. 증상: 응답 헤더 `x-matched-path: /`, 브라우저에 shell 홈(`도구 선택`)이 뜸. `/iss`·`/drawings` 는 reserved 가 아니라 `afterFiles` 로도 동작하지만 일관성을 위해 세 zone 모두 `beforeFiles` 에 둠.
+2. **Turborepo env 선언.** Turborepo 는 `turbo.json` 의 task `env` 에 선언하지 않은 환경변수를 하위 task(`next build`)에 전달하지 않음. Vercel 에 env 를 세팅해도 `process.env.ISS_ZONE_URL` 이 빌드 시 `undefined` → `next.config.ts` 의 rewrite destination 이 `http://localhost:3001` fallback → Vercel edge 가 `404 DNS_HOSTNAME_RESOLVED_PRIVATE`. 신규 env 추가 시 `turbo.json` 의 `tasks.build.env` 에도 같이 선언. 빌드 로그에 `[warn] ... These variables WILL NOT be available to your application` 경고가 있으면 거의 이 문제.
+3. **`vercel redeploy` 는 재빌드함** (CLI help 의 "Rebuild and deploy") — env 바꾸고 redeploy 하면 새 env 로 빌드됨. 단, turbo.json 이 env 를 막고 있으면 소용 없음(위 2번).
+
 ## 필수 컨벤션
 
 ### DB 스키마
