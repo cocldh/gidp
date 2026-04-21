@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import RoleGuard from '@/components/RoleGuard'
-import { createClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import type { FieldDef } from '@/lib/types'
 
 export default function MergePage() {
@@ -22,7 +22,9 @@ export default function MergePage() {
 type Tab = 'rename' | 'merge'
 
 function FieldManagementContent() {
-  const supabase = createClient()
+  const baseSupabase = createClient()
+  const supabase = baseSupabase.schema('iss')
+  const [projectId, setProjectId] = useState<number | null>(null)
   const [fields, setFields] = useState<FieldDef[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -41,16 +43,22 @@ function FieldManagementContent() {
   const [renameMessage, setRenameMessage] = useState('')
 
   useEffect(() => {
-    loadFields()
+    const pid = readProjectIdCookie()
+    setProjectId(pid)
   }, [])
 
-  async function loadFields() {
+  useEffect(() => {
+    if (projectId != null) loadFields(projectId)
+  }, [projectId])
+
+  async function loadFields(pid: number) {
     setLoading(true)
     const { data } = await supabase
       .from('field_def')
       .select('*')
+      .eq('project_id', pid)
       .order('field_name')
-    if (data) setFields(data)
+    if (data) setFields(data as FieldDef[])
     setLoading(false)
   }
 
@@ -73,12 +81,18 @@ function FieldManagementContent() {
       return
     }
 
+    if (projectId == null) {
+      setMergeMessage('Error: 프로젝트가 선택되지 않았습니다')
+      return
+    }
+
     setMerging(true)
     setMergeMessage('')
 
-    const { error } = await supabase.rpc('merge_fields', {
-      source_field_id: sourceId,
-      target_field_id: targetId,
+    const { error } = await baseSupabase.rpc('iss_merge_fields', {
+      p_project_id: projectId,
+      p_source_field_id: sourceId,
+      p_target_field_id: targetId,
     })
 
     if (error) {
@@ -87,7 +101,7 @@ function FieldManagementContent() {
       setMergeMessage(`Successfully merged "${sourceName}" into "${targetName}"`)
       setSourceId('')
       setTargetId('')
-      loadFields()
+      loadFields(projectId)
     }
     setMerging(false)
   }
@@ -138,7 +152,7 @@ function FieldManagementContent() {
       setRenameMessage(`Renamed: "${oldName}" → "${newName}"`)
       setEditingId(null)
       setEditingName('')
-      loadFields()
+      if (projectId != null) loadFields(projectId)
     }
     setRenaming(false)
   }

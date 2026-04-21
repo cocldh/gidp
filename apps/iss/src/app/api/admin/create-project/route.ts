@@ -25,9 +25,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'project_code와 project_name은 필수입니다' }, { status: 400 })
   }
 
-  // 3. SECURITY DEFINER 함수 호출 (스키마 생성 + 테이블 + default fields + project 등록)
+  // 3. SECURITY DEFINER RPC: insert public.project + seed iss.field_def from default_field_def
   const admin = createAdminClient()
-  const { data, error } = await admin.rpc('fn_create_project_schema', {
+  const { data, error } = await admin.rpc('iss_create_project_and_seed', {
     p_code:        project_code,
     p_name:        project_name,
     p_description: description || null,
@@ -37,5 +37,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ message: data })
+  return NextResponse.json({ project_id: data })
 }

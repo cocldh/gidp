@@ -1,62 +1,78 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Navbar from '@/components/Navbar'
 import DocumentFields from '@/components/DocumentFields'
 import { useUserRole } from '@/components/RoleGuard'
-import { createClient, createSchemaClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import type { Tag, Document } from '@/lib/types'
+
+type DocumentWithTemplate = Document & {
+  template: { template_code: string; template_name: string | null } | null
+}
 
 export default function TagDetailPage() {
   const params = useParams()
   const tagId = parseInt(params.tagId as string)
-  const supabase = createSchemaClient()  // 프로젝트 스키마 적용
+  const baseSupabase = createClient()
+  const supabase = baseSupabase.schema('iss')
 
   const { hasRole, loading: roleLoading } = useUserRole()
-  const canGenerate = !roleLoading && hasRole('Engineer')
+  const canGenerate = !roleLoading && hasRole('Editor')
 
+  const [projectId, setProjectId] = useState<number | null>(null)
   const [tag, setTag] = useState<Tag | null>(null)
-  const [documents, setDocuments] = useState<Document[]>([])
+  const [documents, setDocuments] = useState<DocumentWithTemplate[]>([])
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState<number | null>(null)
 
-  async function loadDocuments() {
+  useEffect(() => {
+    setProjectId(readProjectIdCookie())
+  }, [])
+
+  const loadDocuments = useCallback(async () => {
+    if (projectId == null) return
     const { data: docs } = await supabase
       .from('document')
       .select('*, template(template_code, template_name)')
+      .eq('project_id', projectId)
       .eq('tag_id', tagId)
       .order('document_number')
-    if (docs) setDocuments(docs)
-  }
+    if (docs) setDocuments(docs as unknown as DocumentWithTemplate[])
+  }, [supabase, projectId, tagId])
 
   useEffect(() => {
     async function load() {
+      if (projectId == null) return
       setLoading(true)
 
-      const { data: tagData } = await supabase
+      const { data: tagData } = await baseSupabase
         .from('tag')
         .select('*')
+        .eq('project_id', projectId)
         .eq('tag_id', tagId)
         .single()
-      if (tagData) setTag(tagData)
+      if (tagData) setTag(tagData as Tag)
 
       const { data: docs } = await supabase
         .from('document')
         .select('*, template(template_code, template_name)')
+        .eq('project_id', projectId)
         .eq('tag_id', tagId)
         .order('document_number')
       if (docs) {
-        setDocuments(docs)
-        if (docs.length > 0) setSelectedDocId(docs[0].document_id)
+        const typed = docs as unknown as DocumentWithTemplate[]
+        setDocuments(typed)
+        if (typed.length > 0) setSelectedDocId(typed[0]!.document_id)
       }
 
       setLoading(false)
     }
     load()
-  }, [tagId])
+  }, [baseSupabase, supabase, projectId, tagId])
 
   async function handleGenerate(docId: number) {
     setGenerating(docId)
@@ -75,7 +91,7 @@ export default function TagDetailPage() {
       const blob = await res.blob()
       const cd = res.headers.get('Content-Disposition') ?? ''
       const match = cd.match(/filename="(.+?)"/)
-      const filename = match ? match[1] : 'document.xlsx'
+      const filename = match?.[1] ?? 'document.xlsx'
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -95,6 +111,17 @@ export default function TagDetailPage() {
         <Navbar />
         <main className="max-w-6xl mx-auto px-4 py-6">
           <div className="text-gray-500">Loading...</div>
+        </main>
+      </div>
+    )
+  }
+
+  if (projectId == null) {
+    return (
+      <div className="min-h-screen">
+        <Navbar />
+        <main className="max-w-6xl mx-auto px-4 py-6">
+          <div className="text-gray-500">프로젝트가 선택되지 않았습니다.</div>
         </main>
       </div>
     )
@@ -138,11 +165,11 @@ export default function TagDetailPage() {
                     >
                       <div className="font-medium truncate">{doc.document_number}</div>
                       <div className="text-xs text-gray-500">
-                        {(doc.template as any)?.template_name
-                          ? `${(doc.template as any).template_code} - ${(doc.template as any).template_name}`
-                          : ((doc.template as any)?.template_code ?? '')}
+                        {doc.template?.template_name
+                          ? `${doc.template.template_code} - ${doc.template.template_name}`
+                          : (doc.template?.template_code ?? '')}
                         {doc.sheet_number ? ` / Sheet ${doc.sheet_number}` : ''}
-                        {(doc.revision_number || (doc as any).minor_revision) ? ` / Rev ${(doc.revision_number ?? '') + ((doc as any).minor_revision ?? '')}` : ''}
+                        {(doc.revision_number || doc.minor_revision) ? ` / Rev ${(doc.revision_number ?? '') + (doc.minor_revision ?? '')}` : ''}
                       </div>
                     </button>
                     {canGenerate && (

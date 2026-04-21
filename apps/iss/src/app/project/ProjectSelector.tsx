@@ -13,9 +13,9 @@ interface Project {
 export default function ProjectSelector({ projects }: { projects: Project[] }) {
   const [isPending, startTransition] = useTransition()
 
-  function handleSelect(code: string) {
+  function handleSelect(id: number) {
     startTransition(() => {
-      selectProject(code)
+      selectProject(id)
     })
   }
 
@@ -23,8 +23,8 @@ export default function ProjectSelector({ projects }: { projects: Project[] }) {
     <div className="grid gap-4">
       {projects.map((p) => (
         <button
-          key={p.project_code}
-          onClick={() => handleSelect(p.project_code)}
+          key={p.project_id}
+          onClick={() => handleSelect(p.project_id)}
           disabled={isPending}
           className="bg-white rounded-xl shadow hover:shadow-md border border-gray-200 hover:border-blue-400 transition-all p-6 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -33,7 +33,7 @@ export default function ProjectSelector({ projects }: { projects: Project[] }) {
               <h2 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600">
                 {p.project_name}
               </h2>
-              <p className="text-sm text-gray-400 font-mono mt-0.5">schema: {p.project_code}</p>
+              <p className="text-sm text-gray-400 font-mono mt-0.5">code: {p.project_code}</p>
               {p.description && (
                 <p className="text-sm text-gray-500 mt-1">{p.description}</p>
               )}

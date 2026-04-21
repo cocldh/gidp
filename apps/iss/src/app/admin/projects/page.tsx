@@ -66,7 +66,7 @@ function ProjectsContent() {
 
     const json = await res.json()
     if (res.ok) {
-      setResult({ ok: true, msg: json.message })
+      setResult({ ok: true, msg: `project_id=${json.project_id} 생성 완료` })
       setCode('')
       setName('')
       setDesc('')

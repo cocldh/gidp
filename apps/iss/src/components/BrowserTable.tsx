@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { createSchemaClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from './RoleGuard'
 import type { BrowserRow, FieldColumn, Template } from '@/lib/types'
 
@@ -12,11 +12,13 @@ type BrowserMode = 'total' | 'form'
 const makeKey = (docId: number, fieldId: number): EditKey => `${docId}_${fieldId}`
 
 export default function BrowserTable() {
-  const supabase = createSchemaClient()
+  const supabase = createClient()
+  const iss = supabase.schema('iss')
   const { hasRole } = useUserRole()
-  const canEdit = hasRole('Engineer')
+  const canEdit = hasRole('Editor')
   const isAdmin = hasRole('Admin')
 
+  const [projectId, setProjectId] = useState<number | null>(null)
   const [browserMode, setBrowserMode] = useState<BrowserMode>('form')
   const [rows, setRows] = useState<BrowserRow[]>([])
   const [columns, setColumns] = useState<FieldColumn[]>([])
@@ -37,14 +39,26 @@ export default function BrowserTable() {
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
   const tableRef = useRef<HTMLTableElement>(null)
 
-  useEffect(() => { loadTemplates() }, [])
+  useEffect(() => {
+    const pid = readProjectIdCookie()
+    setProjectId(pid)
+  }, [])
 
-  async function loadTemplates() {
-    const { data } = await supabase.from('template').select('template_id, template_code, template_name').order('template_code')
-    if (data) setTemplates(data)
+  useEffect(() => {
+    if (projectId != null) loadTemplates(projectId)
+  }, [projectId])
+
+  async function loadTemplates(pid: number) {
+    const { data } = await iss
+      .from('template')
+      .select('template_id, template_code, template_name')
+      .eq('project_id', pid)
+      .order('template_code')
+    if (data) setTemplates(data as Template[])
   }
 
   const loadData = useCallback(async (p = 0) => {
+    if (projectId == null) return
     if (browserMode === 'form' && !selectedTemplate) return
     setLoading(true)
     setPage(p)
@@ -55,8 +69,12 @@ export default function BrowserTable() {
       : null
 
     const [{ data: colData }, { data: rowData }] = await Promise.all([
-      supabase.rpc('get_field_columns', { p_template_id: selectedTemplate }),
-      supabase.rpc('get_browser_data', {
+      supabase.rpc('iss_get_field_columns', {
+        p_project_id: projectId,
+        p_template_id: selectedTemplate,
+      }),
+      supabase.rpc('iss_get_browser_data', {
+        p_project_id: projectId,
         p_template_id: selectedTemplate,
         p_search: search.trim() || null,
         p_limit: pageSize + 1,
@@ -67,20 +85,28 @@ export default function BrowserTable() {
     let customOrder: string[] = []
     if (templateCode) {
       try {
-        const res = await fetch(`/api/column-order?form=${encodeURIComponent(templateCode)}`)
+        const res = await fetch(
+          `/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
+        )
         const json = await res.json()
         customOrder = json.order ?? []
       } catch {}
     }
 
     if (colData) {
-      const fieldIds = colData.map((c: FieldColumn) => c.field_id)
-      const { data: kindData } = await supabase.from('field_def').select('field_id, data_kind').in('field_id', fieldIds)
+      const typedCols = colData as FieldColumn[]
+      const fieldIds = typedCols.map(c => c.field_id)
+      const { data: kindData } = await iss
+        .from('field_def')
+        .select('field_id, data_kind')
+        .in('field_id', fieldIds)
       const kindMap: Record<number, string> = {}
-      for (const k of kindData ?? []) kindMap[k.field_id] = k.data_kind ?? ''
-      const enriched = colData.map((c: FieldColumn) => ({ ...c, data_kind: kindMap[c.field_id] ?? '' }))
-      const orderMap = new Map(customOrder.map((name: string, idx: number) => [name, idx]))
-      enriched.sort((a: FieldColumn, b: FieldColumn) => {
+      for (const k of (kindData ?? []) as Array<{ field_id: number; data_kind: string | null }>) {
+        kindMap[k.field_id] = k.data_kind ?? ''
+      }
+      const enriched = typedCols.map(c => ({ ...c, data_kind: kindMap[c.field_id] ?? '' }))
+      const orderMap = new Map(customOrder.map((name, idx) => [name, idx]))
+      enriched.sort((a, b) => {
         const g = (c: FieldColumn) => c.data_kind === 'default' ? 0 : c.field_name.toLowerCase().includes('note') ? 2 : 1
         const ga = g(a), gb = g(b)
         if (ga !== gb) return ga - gb
@@ -95,19 +121,25 @@ export default function BrowserTable() {
     }
 
     if (rowData) {
-      const hasMore = rowData.length > pageSize
-      const displayRows = hasMore ? rowData.slice(0, pageSize) : rowData
+      const typed = rowData as BrowserRow[]
+      const hasMore = typed.length > pageSize
+      const displayRows = hasMore ? typed.slice(0, pageSize) : typed
       setRows(displayRows)
-      setTotalHint(hasMore ? `${pageSize}+` : `${rowData.length}`)
+      setTotalHint(hasMore ? `${pageSize}+` : `${typed.length}`)
 
-      // Load changed cells for revision highlighting
-      const docIds = displayRows.map((r: any) => r.document_id)
+      const docIds = displayRows.map(r => r.document_id)
       if (docIds.length > 0) {
-        const { data: changedData } = await supabase
+        const { data: changedData } = await iss
           .from('document_value_change')
           .select('document_id, field_id')
           .in('document_id', docIds)
-        setChangedSet(new Set((changedData ?? []).map((d: any) => `${d.document_id}_${d.field_id}`)))
+        setChangedSet(
+          new Set(
+            ((changedData ?? []) as Array<{ document_id: number; field_id: number }>).map(
+              d => `${d.document_id}_${d.field_id}`,
+            ),
+          ),
+        )
       } else {
         setChangedSet(new Set())
       }
@@ -119,9 +151,8 @@ export default function BrowserTable() {
 
     setHasSearched(true)
     setLoading(false)
-  }, [selectedTemplate, search, pageSize, browserMode, templates])
+  }, [projectId, selectedTemplate, search, pageSize, browserMode, templates])
 
-  // Client-side column filter
   const filteredRows = rows.filter(row => {
     for (const [key, val] of Object.entries(columnFilters)) {
       if (!val.trim()) continue
@@ -174,11 +205,12 @@ export default function BrowserTable() {
       const [docId, fieldId] = key.split('_').map(Number)
       return { document_id: docId, field_id: fieldId, value_text: value || null }
     })
-    const { error } = await supabase.from('document_value').upsert(upserts, { onConflict: 'document_id,field_id' })
+    const { error } = await iss
+      .from('document_value')
+      .upsert(upserts, { onConflict: 'document_id,field_id' })
     if (error) {
       setMessage(`Error: ${error.message}`)
     } else {
-      await supabase.rpc('refresh_browser_mv')
       setMessage(`Saved ${upserts.length} cell(s)`)
       setEditedCells({})
       await loadData(page)
@@ -222,7 +254,7 @@ export default function BrowserTable() {
       const blob = await res.blob()
       const cd = res.headers.get('Content-Disposition') ?? ''
       const match = cd.match(/filename="(.+?)"/)
-      const filename = match ? match[1] : (ids.length === 1 ? 'document.xlsx' : 'ISS_Forms.zip')
+      const filename = match?.[1] ?? (ids.length === 1 ? 'document.xlsx' : 'ISS_Forms.zip')
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url; a.download = filename; a.click()
@@ -250,7 +282,7 @@ export default function BrowserTable() {
         return [...fixed, ...fieldVals].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
       }),
     ]
-    const blob = new Blob(['\uFEFF' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const blob = new Blob(['﻿' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -269,9 +301,16 @@ export default function BrowserTable() {
     />
   )
 
+  if (projectId == null) {
+    return (
+      <div className="text-center text-gray-500 py-8">
+        프로젝트가 선택되지 않았습니다.
+      </div>
+    )
+  }
+
   return (
     <div>
-      {/* Mode tabs */}
       <div className="flex border-b border-gray-200 mb-3">
         {isAdmin && (
           <button
@@ -297,7 +336,6 @@ export default function BrowserTable() {
         </button>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-4">
         <select
           value={selectedTemplate ?? ''}
@@ -359,7 +397,6 @@ export default function BrowserTable() {
         )}
       </div>
 
-      {/* Table */}
       {loading ? (
         <div className="text-center text-gray-500 py-8">Loading...</div>
       ) : !hasSearched ? (
@@ -374,7 +411,6 @@ export default function BrowserTable() {
         <div className="overflow-auto max-h-[70vh] border rounded-lg">
           <table ref={tableRef} className="text-xs border-collapse w-full">
             <thead className="bg-gray-100 sticky top-0 z-10">
-              {/* Column name row */}
               <tr>
                 {canEdit && <th className="px-2 py-1.5 border-b text-center w-8"></th>}
                 <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Tag Number</th>
@@ -386,7 +422,6 @@ export default function BrowserTable() {
                   <th key={col.field_id} className="px-2 py-1.5 text-left border-b whitespace-nowrap">{col.field_name}</th>
                 ))}
               </tr>
-              {/* Filter row */}
               <tr className="bg-white">
                 {canEdit && (
                   <td className="px-1 py-1 border-b text-center">
@@ -474,7 +509,6 @@ export default function BrowserTable() {
         </div>
       )}
 
-      {/* Pagination */}
       {hasSearched && (
         <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
           <span>

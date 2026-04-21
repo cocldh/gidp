@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase-server'
+import { createClient, getServerProjectId } from '@/lib/supabase-server'
 import JSZip from 'jszip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 
@@ -391,6 +391,7 @@ async function deleteSheets(zip: JSZip, keepSheetNames: Set<string>): Promise<vo
 
 async function generateDocument(
   supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: number,
   doc: DocInfo,
 ): Promise<{ filename: string; data: Uint8Array; error?: string } | { error: string }> {
   const templateCode = doc.template?.template_code
@@ -414,20 +415,22 @@ async function generateDocument(
 
   // 2. Fetch field values (with tag pooling)
   const { data: fieldValues } = await supabase
-    .rpc('get_tag_field_values', { doc_id: doc.document_id })
+    .rpc('iss_get_tag_field_values', { p_document_id: doc.document_id })
 
   const valueMap: Record<string, string> = {}
   if (fieldValues) {
-    for (const fv of fieldValues) {
+    for (const fv of fieldValues as Array<{ field_name: string; value_text: string }>) {
       valueMap[fv.field_name] = fv.value_text
     }
   }
 
   // 3. Fetch mapping rules with options
   const { data: mappingRules, error: mapErr } = await supabase
+    .schema('iss')
     .from('mapping_rule')
     .select('*, field_def(field_id, field_name), mapping_option(*)')
-    .eq('template_id', doc.template_id) as { data: MappingRuleRow[] | null; error: any }
+    .eq('project_id', projectId)
+    .eq('template_id', doc.template_id) as unknown as { data: MappingRuleRow[] | null; error: { message: string } | null }
 
   if (!mappingRules || mappingRules.length === 0) {
     return { error: `doc ${doc.document_id}: no mapping rules for template ${templateCode} (template_id=${doc.template_id})${mapErr ? ' - ' + mapErr.message : ''}` }
@@ -546,6 +549,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden: insufficient role' }, { status: 403 })
   }
 
+  const projectId = await getServerProjectId()
+  if (projectId == null) {
+    return NextResponse.json({ error: 'No project selected' }, { status: 400 })
+  }
+
   // Parse request
   let body: { document_ids: number[] }
   try {
@@ -561,8 +569,10 @@ export async function POST(request: NextRequest) {
 
   // Fetch document info
   const { data: docs, error: docsErr } = await supabase
+    .schema('iss')
     .from('document')
     .select('*, template(template_code)')
+    .eq('project_id', projectId)
     .in('document_id', document_ids)
 
   if (docsErr || !docs || docs.length === 0) {
@@ -573,9 +583,9 @@ export async function POST(request: NextRequest) {
   const results: { filename: string; data: Uint8Array }[] = []
   const errors: string[] = []
 
-  for (const doc of docs as DocInfo[]) {
+  for (const doc of docs as unknown as DocInfo[]) {
     try {
-      const result = await generateDocument(supabase, doc)
+      const result = await generateDocument(supabase, projectId, doc)
       if ('filename' in result && 'data' in result) {
         results.push(result as { filename: string; data: Uint8Array })
       } else {

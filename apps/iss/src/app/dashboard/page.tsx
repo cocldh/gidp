@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { createClient, getServerProjectSchema } from '@/lib/supabase-server'
+import { createClient, getServerProjectId } from '@/lib/supabase-server'
 import Navbar from '@/components/Navbar'
 import TagList from '@/components/TagList'
 
@@ -17,30 +17,23 @@ export default async function DashboardPage() {
 
   if (!profile || profile.role === 'Pending') redirect('/pending')
 
-  // Admin은 project role 체크 없이 진입 허용
+  let projectId: number | null = null
+
   if (profile.role !== 'Admin') {
-    const projectSchema = await getServerProjectSchema()
+    projectId = await getServerProjectId()
+    if (projectId == null) redirect('/project')
 
-    // 프로젝트가 선택되지 않은 경우
-    if (!projectSchema) redirect('/project')
-
-    const { data: project } = await supabase
-      .from('project')
-      .select('project_id')
-      .eq('project_code', projectSchema)
-      .single()
-
-    if (!project) redirect('/project')
-
-    // 해당 프로젝트에 role이 지정되어 있는지 확인
     const { data: upr } = await supabase
       .from('user_project_role')
       .select('role')
       .eq('user_id', user.id)
-      .eq('project_id', project.project_id)
+      .eq('project_id', projectId)
       .maybeSingle()
 
     if (!upr) redirect('/project')
+  } else {
+    projectId = await getServerProjectId()
+    if (projectId == null) redirect('/project')
   }
 
   return (

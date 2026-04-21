@@ -1,34 +1,24 @@
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { cookies } from 'next/headers';
 
-export async function createClient() {
-  const cookieStore = await cookies()
+export { createServerSupabaseClient as createClient } from '@gidp/auth/server';
 
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // The `setAll` method is called from a Server Component.
-            // This can be ignored if you have middleware refreshing sessions.
-          }
-        },
-      },
-    }
-  )
+export const PROJECT_ID_COOKIE = 'gidp_project_id';
+
+export async function getServerProjectId(): Promise<number | null> {
+  const store = await cookies();
+  const raw = store.get(PROJECT_ID_COOKIE)?.value;
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** 현재 선택된 프로젝트 스키마를 쿠키에서 읽어 반환 (서버 컴포넌트 전용) */
-export async function getServerProjectSchema(): Promise<string> {
-  const cookieStore = await cookies()
-  return cookieStore.get('iss_project')?.value ?? 'public'
+/** Throws if the project cookie is absent. Use in routes that require a project. */
+export async function requireServerProjectId(): Promise<number> {
+  const id = await getServerProjectId();
+  if (id == null) {
+    throw new Error(
+      'No project selected — set the gidp_project_id cookie via /project',
+    );
+  }
+  return id;
 }

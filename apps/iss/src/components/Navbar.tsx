@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { createClient, getProjectSchema } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from '@/components/RoleGuard'
 import type { UserProfile } from '@/lib/types'
 
@@ -29,15 +29,18 @@ export default function Navbar() {
   }, [])
 
   useEffect(() => {
-    const schema = getProjectSchema()
+    const projectId = readProjectIdCookie()
+    if (projectId == null) {
+      setProjectName('')
+      return
+    }
     supabase
       .from('project')
       .select('project_name')
-      .eq('project_code', schema || 'public')
+      .eq('project_id', projectId)
       .single()
       .then(({ data }) => {
-        if (data) setProjectName(data.project_name)
-        else setProjectName(schema || 'public')
+        setProjectName(data?.project_name ?? String(projectId))
       })
   }, [])
 
@@ -47,10 +50,7 @@ export default function Navbar() {
   }
 
   const isGlobalAdmin = globalRole === 'Admin'
-  // ProjectAdmin or Global Admin can access form/field management
   const canManageForms = hasRole('ProjectAdmin')
-  // Only Global Admin can access User Management
-  // Editor+ can access Change Log
   const canViewChangelog = hasRole('Editor')
 
   return (

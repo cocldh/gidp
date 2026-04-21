@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient, createSchemaClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import Navbar from '@/components/Navbar'
+import { useUserRole } from '@/components/RoleGuard'
 
 const PAGE_SIZE = 100
 
@@ -20,17 +21,33 @@ interface ChangeRow {
   changed_by: string | null
 }
 
-export default function ChangelogPage() {
-  const supabase = createSchemaClient()  // 프로젝트 스키마 적용
-  const baseSupabase = createClient()    // auth 전용
-  const router = useRouter()
+type RawRow = {
+  detail_id: number
+  changed_at: string
+  document_number: string
+  tag_number: string | null
+  field_name: string
+  previous_value: string | null
+  new_value: string | null
+  changed_by: string | null
+  document_revision: {
+    revision_number: string
+    revision_type: string
+    document: { project_id: number }
+  } | null
+}
 
+export default function ChangelogPage() {
+  const baseSupabase = createClient()
+  const supabase = baseSupabase.schema('iss')
+  const router = useRouter()
+  const { globalRole, hasRole, loading: roleLoading } = useUserRole()
+
+  const [projectId, setProjectId] = useState<number | null>(null)
   const [rows, setRows] = useState<ChangeRow[]>([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
-  const [authorized, setAuthorized] = useState<boolean | null>(null)
-  const [isAdmin, setIsAdmin] = useState(false)
   const [baselineMsg, setBaselineMsg] = useState('')
   const [settingBaseline, setSettingBaseline] = useState(false)
 
@@ -43,59 +60,22 @@ export default function ChangelogPage() {
   const [filterDateTo, setFilterDateTo] = useState('')
 
   useEffect(() => {
-    async function checkAuth() {
-      const { data: { user } } = await baseSupabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-
-      const { data: profile } = await baseSupabase
-        .from('user_profile')
-        .select('role')
-        .eq('id', user.id)
-        .single()
-
-      const globalRole = profile?.role ?? ''
-
-      // Global Admin always allowed
-      if (globalRole === 'Admin') {
-        setIsAdmin(true)
-        setAuthorized(true)
-        return
-      }
-
-      // Active users: check project role (Editor+ can access Change Log)
-      if (globalRole === 'Active') {
-        const schema = typeof document !== 'undefined'
-          ? (() => { const m = document.cookie.match(/(?:^|;\s*)iss_project=([^;]+)/); return m ? decodeURIComponent(m[1]) : null })()
-          : null
-
-        if (schema) {
-          const { data: project } = await baseSupabase
-            .from('project')
-            .select('project_id')
-            .eq('project_code', schema)
-            .single()
-
-          if (project) {
-            const { data: upr } = await baseSupabase
-              .from('user_project_role')
-              .select('role')
-              .eq('user_id', user.id)
-              .eq('project_id', project.project_id)
-              .single()
-
-            const pRole = upr?.role ?? ''
-            setAuthorized(pRole === 'ProjectAdmin' || pRole === 'Editor')
-            return
-          }
-        }
-      }
-
-      setAuthorized(false)
-    }
-    checkAuth()
+    setProjectId(readProjectIdCookie())
   }, [])
 
+  useEffect(() => {
+    async function ensureUser() {
+      const { data: { user } } = await baseSupabase.auth.getUser()
+      if (!user) router.push('/login')
+    }
+    ensureUser()
+  }, [baseSupabase, router])
+
+  const isAdmin = globalRole === 'Admin'
+  const authorized = !roleLoading && hasRole('Editor')
+
   const loadData = useCallback(async (p = 0) => {
+    if (projectId == null) return
     setLoading(true)
     setPage(p)
 
@@ -110,8 +90,9 @@ export default function ChangelogPage() {
         previous_value,
         new_value,
         changed_by,
-        document_revision!inner(revision_number, revision_type)
+        document_revision!inner(revision_number, revision_type, document!inner(project_id))
       `)
+      .eq('document_revision.document.project_id', projectId)
       .order('changed_at', { ascending: false })
       .range(p * PAGE_SIZE, (p + 1) * PAGE_SIZE)
 
@@ -128,7 +109,7 @@ export default function ChangelogPage() {
       console.error('Changelog load error:', error)
       setRows([])
     } else {
-      const mapped: ChangeRow[] = (data ?? []).map((r: any) => ({
+      const mapped: ChangeRow[] = ((data ?? []) as unknown as RawRow[]).map((r) => ({
         detail_id: r.detail_id,
         changed_at: r.changed_at,
         document_number: r.document_number,
@@ -140,26 +121,44 @@ export default function ChangelogPage() {
         revision_number: r.document_revision?.revision_number ?? '',
         revision_type: r.document_revision?.revision_type ?? '',
       }))
-      // The range fetches PAGE_SIZE+1 to detect hasMore
       setHasMore(mapped.length > PAGE_SIZE)
       setRows(mapped.slice(0, PAGE_SIZE))
     }
 
     setLoading(false)
-  }, [filterDoc, filterTag, filterField, filterAuthor, filterDateFrom, filterDateTo])
+  }, [supabase, projectId, filterDoc, filterTag, filterField, filterAuthor, filterDateFrom, filterDateTo])
 
   useEffect(() => {
-    if (authorized) loadData(0)
-  }, [authorized])
+    if (authorized && projectId != null) loadData(0)
+  }, [authorized, projectId, loadData])
 
   async function handleSetBaseline() {
+    if (projectId == null) return
     if (!confirm('Set baseline? This will clear all "previous_value" tracking for every document value, treating the current state as the new baseline.')) return
     setSettingBaseline(true)
     setBaselineMsg('')
+
+    // Scope delete to current project — fetch doc ids first, then delete
+    const { data: docs, error: docsErr } = await supabase
+      .from('document')
+      .select('document_id')
+      .eq('project_id', projectId)
+    if (docsErr) {
+      setBaselineMsg(`Error: ${docsErr.message}`)
+      setSettingBaseline(false)
+      return
+    }
+    const docIds = (docs ?? []).map((d: { document_id: number }) => d.document_id)
+    if (docIds.length === 0) {
+      setBaselineMsg('No documents in this project — nothing to reset.')
+      setSettingBaseline(false)
+      return
+    }
+
     const { error } = await supabase
       .from('document_value_change')
       .delete()
-      .neq('document_id', 0)
+      .in('document_id', docIds)
     if (error) {
       setBaselineMsg(`Error: ${error.message}`)
     } else {
@@ -179,8 +178,9 @@ export default function ChangelogPage() {
     } catch { return iso }
   }
 
-  if (authorized === null) return <div className="min-h-screen"><Navbar /><div className="p-8 text-gray-500">Loading...</div></div>
-  if (authorized === false) return <div className="min-h-screen"><Navbar /><div className="p-8 text-red-500">Access denied.</div></div>
+  if (roleLoading) return <div className="min-h-screen"><Navbar /><div className="p-8 text-gray-500">Loading...</div></div>
+  if (!authorized) return <div className="min-h-screen"><Navbar /><div className="p-8 text-red-500">Access denied.</div></div>
+  if (projectId == null) return <div className="min-h-screen"><Navbar /><div className="p-8 text-gray-500">프로젝트가 선택되지 않았습니다.</div></div>
 
   return (
     <div className="min-h-screen bg-gray-50">

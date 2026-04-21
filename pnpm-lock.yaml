@@ -72,6 +72,15 @@ importers:
 
   apps/iss:
     dependencies:
+      '@gidp/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@gidp/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@gidp/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@supabase/auth-ui-react':
         specifier: ^0.4.7
         version: 0.4.7(@supabase/supabase-js@2.104.0)
@@ -100,6 +109,9 @@ importers:
         specifier: 19.2.3
         version: 19.2.3(react@19.2.3)
     devDependencies:
+      '@gidp/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@tailwindcss/postcss':
         specifier: ^4
         version: 4.2.3

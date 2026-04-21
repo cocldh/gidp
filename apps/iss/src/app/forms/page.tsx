@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import RoleGuard from '@/components/RoleGuard'
-import { createSchemaClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import type { Template, MappingRule } from '@/lib/types'
 
 export default function FormsPage() {
@@ -20,7 +20,9 @@ export default function FormsPage() {
 }
 
 function FormsContent() {
-  const supabase = createSchemaClient()
+  const baseSupabase = createClient()
+  const supabase = baseSupabase.schema('iss')
+  const [projectId, setProjectId] = useState<number | null>(null)
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null)
   const [mappings, setMappings] = useState<MappingRule[]>([])
@@ -29,36 +31,44 @@ function FormsContent() {
   const [editingNameValue, setEditingNameValue] = useState('')
 
   useEffect(() => {
-    loadTemplates()
+    setProjectId(readProjectIdCookie())
   }, [])
 
-  async function loadTemplates() {
+  useEffect(() => {
+    if (projectId != null) loadTemplates(projectId)
+  }, [projectId])
+
+  async function loadTemplates(pid: number) {
     setLoading(true)
     const { data } = await supabase
       .from('template')
       .select('*')
+      .eq('project_id', pid)
       .order('template_code')
-    if (data) setTemplates(data)
+    if (data) setTemplates(data as Template[])
     setLoading(false)
   }
 
   async function selectTemplate(t: Template) {
+    if (projectId == null) return
     setSelectedTemplate(t)
     const { data } = await supabase
       .from('mapping_rule')
       .select('*, field_def(field_name), mapping_option(*)')
+      .eq('project_id', projectId)
       .eq('template_id', t.template_id)
       .order('mapping_id')
-    if (data) setMappings(data as any)
+    if (data) setMappings(data as unknown as MappingRule[])
   }
 
   async function deleteTemplate(t: Template) {
+    if (projectId == null) return
     if (!confirm(`Delete template "${t.template_code}" and all its mappings?`)) return
     await supabase.from('mapping_rule').delete().eq('template_id', t.template_id)
     await supabase.from('template').delete().eq('template_id', t.template_id)
     setSelectedTemplate(null)
     setMappings([])
-    loadTemplates()
+    loadTemplates(projectId)
   }
 
   async function deleteMapping(mappingId: number) {
@@ -73,14 +83,19 @@ function FormsContent() {
   }
 
   async function saveEditName(templateId: number) {
+    if (projectId == null) return
     const newName = editingNameValue.trim() || null
     await supabase.from('template').update({ template_name: newName }).eq('template_id', templateId)
     setEditingNameId(null)
-    loadTemplates()
+    loadTemplates(projectId)
   }
 
   if (loading) {
     return <div className="text-gray-500">Loading templates...</div>
+  }
+
+  if (projectId == null) {
+    return <div className="text-gray-500">프로젝트가 선택되지 않았습니다.</div>
   }
 
   return (
@@ -165,26 +180,32 @@ function FormsContent() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {mappings.map((m) => (
-                      <tr key={m.mapping_id} className="hover:bg-gray-50">
-                        <td className="px-3 py-2">{(m as any).field_def?.field_name ?? m.field_id}</td>
-                        <td className="px-3 py-2">{m.data_type}</td>
-                        <td className="px-3 py-2">{m.target_sheet}</td>
-                        <td className="px-3 py-2">{m.target_cell}</td>
-                        <td className="px-3 py-2 text-gray-500">{m.remark}</td>
-                        <td className="px-3 py-2 text-gray-500 text-xs">
-                          {(m as any).mapping_option?.map((o: any) => o.expected_value).join(', ')}
-                        </td>
-                        <td className="px-3 py-2">
-                          <button
-                            onClick={() => deleteMapping(m.mapping_id)}
-                            className="text-red-400 hover:text-red-600 text-xs"
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {mappings.map((m) => {
+                      const expanded = m as MappingRule & {
+                        field_def?: { field_name: string } | null
+                        mapping_option?: { expected_value: string | null }[]
+                      }
+                      return (
+                        <tr key={m.mapping_id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2">{expanded.field_def?.field_name ?? m.field_id}</td>
+                          <td className="px-3 py-2">{m.data_type}</td>
+                          <td className="px-3 py-2">{m.target_sheet}</td>
+                          <td className="px-3 py-2">{m.target_cell}</td>
+                          <td className="px-3 py-2 text-gray-500">{m.remark}</td>
+                          <td className="px-3 py-2 text-gray-500 text-xs">
+                            {expanded.mapping_option?.map(o => o.expected_value).filter(Boolean).join(', ')}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              onClick={() => deleteMapping(m.mapping_id)}
+                              className="text-red-400 hover:text-red-600 text-xs"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

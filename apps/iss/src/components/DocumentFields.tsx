@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createClient, createSchemaClient } from '@/lib/supabase-client'
+import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from './RoleGuard'
 import type { DocumentRevision, DocumentRevisionDetail } from '@/lib/types'
 import type { User } from '@supabase/supabase-js'
@@ -83,15 +83,17 @@ interface RevisionWithDetails extends DocumentRevision {
 }
 
 export default function DocumentFields({ documentId, tagId, onRevisionCommit }: DocumentFieldsProps) {
-  const supabase = createSchemaClient()  // 프로젝트 스키마 적용
-  const baseSupabase = createClient()    // auth 전용 (항상 public)
+  const baseSupabase = createClient()            // public schema (tag, auth)
+  const supabase = baseSupabase.schema('iss')    // iss.* tables
   const { hasRole } = useUserRole()
-  const canEdit = hasRole('Engineer')
+  const canEdit = hasRole('Editor')
   const isAdmin = hasRole('Admin')
   const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [projectId, setProjectId] = useState<number | null>(null)
 
   useEffect(() => {
     baseSupabase.auth.getUser().then(({ data }) => setCurrentUser(data.user))
+    setProjectId(readProjectIdCookie())
   }, [])
 
   const [fields, setFields] = useState<FieldValue[]>([])
@@ -144,7 +146,7 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
     setCurrentDocNumber(docNum)
 
     if (tagId) {
-      const { data: tagData } = await supabase
+      const { data: tagData } = await baseSupabase
         .from('tag')
         .select('tag_number')
         .eq('tag_id', tagId)
@@ -153,9 +155,11 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
     }
 
     let customOrder: string[] = []
-    if (templateCode) {
+    if (templateCode && projectId != null) {
       try {
-        const res = await fetch(`/api/column-order?form=${encodeURIComponent(templateCode)}`)
+        const res = await fetch(
+          `/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
+        )
         const json = await res.json()
         customOrder = json.order ?? []
       } catch {}
@@ -177,17 +181,21 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
         .from('field_def')
         .select('field_id, field_name, display_order, data_kind')
         .in('field_id', mappingFieldIds)
-      const { data: dFields } = await supabase
+      let defaultQuery = supabase
         .from('field_def')
         .select('field_id, field_name, display_order, data_kind')
         .eq('data_kind', 'default')
+      if (projectId != null) defaultQuery = defaultQuery.eq('project_id', projectId)
+      const { data: dFields } = await defaultQuery
       const fieldMap = new Map<number, any>()
       for (const f of [...(mFields ?? []), ...(dFields ?? [])]) fieldMap.set(f.field_id, f)
       fieldDefs = Array.from(fieldMap.values())
     } else {
-      const { data } = await supabase
+      let allQuery = supabase
         .from('field_def')
         .select('field_id, field_name, display_order, data_kind')
+      if (projectId != null) allQuery = allQuery.eq('project_id', projectId)
+      const { data } = await allQuery
         .order('display_order', { ascending: true, nullsFirst: false })
         .order('field_name')
       fieldDefs = data ?? []
@@ -263,7 +271,7 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
 
     setFields(fieldsToShow)
     setLoading(false)
-  }, [documentId, tagId])
+  }, [documentId, tagId, projectId])
 
   useEffect(() => {
     loadFields()
@@ -377,10 +385,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
       // currentMinorRevision이 있으면 후속 minor → 기존 DVC 유지하며 누적 merge
       if (!currentMinorRevision) {
         // 첫 번째 minor: 같은 document_number의 모든 sheet DVC 전체 삭제
-        const { data: allSheetDocs } = await supabase
+        let allSheetQuery = supabase
           .from('document')
           .select('document_id')
           .eq('document_number', currentDocNumber ?? '')
+        if (projectId != null) allSheetQuery = allSheetQuery.eq('project_id', projectId)
+        const { data: allSheetDocs } = await allSheetQuery
         const allSheetIds = (allSheetDocs ?? []).map((d: any) => d.document_id as number)
         if (allSheetIds.length > 0) {
           await supabase.from('document_value_change').delete().in('document_id', allSheetIds)
@@ -441,7 +451,7 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
       }
     }
 
-    supabase.rpc('refresh_browser_mv').then(() => {})
+    // refresh_browser_mv is a no-op shim in the unified schema
     setMessage('저장 완료 — Minor Revision 자동 커밋')
     setEditedValues({})
     await loadFields()
@@ -506,11 +516,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
   }
 
   const loadTargetSheets = async (docNumber: string) => {
-    const { data } = await supabase
+    let q = supabase
       .from('document')
       .select('sheet_number, revision_number, minor_revision')
       .eq('document_number', docNumber)
-      .order('sheet_number')
+    if (projectId != null) q = q.eq('project_id', projectId)
+    const { data } = await q.order('sheet_number')
     const sheets = (data ?? []).map((d: any) => ({
       sheet: String(d.sheet_number ?? '').padStart(3, '0'),
       rev: currentRevisionDisplay(d.revision_number, d.minor_revision),
@@ -525,10 +536,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
       const committedBy = currentUser?.email ?? null
 
       // 대상 document_id 목록
-      const { data: targetDocs } = await supabase
+      let targetQuery = supabase
         .from('document')
         .select('document_id, document_number')
         .eq('document_number', selectedDocNumber)
+      if (projectId != null) targetQuery = targetQuery.eq('project_id', projectId)
+      const { data: targetDocs } = await targetQuery
 
       for (const td of targetDocs ?? []) {
         const t_did = td.document_id as number
@@ -616,10 +629,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
         await supabase.from('document_value_change').delete().eq('document_id', t_did)
         if (cumulativeChanges.length > 0) {
           const fieldNames = cumulativeChanges.map(c => c.field_name)
-          const { data: fieldDefs } = await supabase
+          let fieldDefQuery = supabase
             .from('field_def')
             .select('field_id, field_name')
             .in('field_name', fieldNames)
+          if (projectId != null) fieldDefQuery = fieldDefQuery.eq('project_id', projectId)
+          const { data: fieldDefs } = await fieldDefQuery
           const nameToId = new Map((fieldDefs ?? []).map((f: any) => [f.field_name as string, f.field_id as number]))
           const dvcInserts = cumulativeChanges
             .filter(c => nameToId.has(c.field_name))
@@ -639,11 +654,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
 
         // [G.5] Revision Description field value 저장 (모든 sheet에 적용)
         if (commitRevDesc) {
-          const { data: revDescField } = await supabase
+          let revDescQuery = supabase
             .from('field_def')
             .select('field_id')
             .ilike('field_name', 'revision description')
-            .maybeSingle()
+          if (projectId != null) revDescQuery = revDescQuery.eq('project_id', projectId)
+          const { data: revDescField } = await revDescQuery.maybeSingle()
           const revDescFieldId = (revDescField as any)?.field_id as number | null
           if (revDescFieldId) {
             await supabase.from('document_value').upsert(
@@ -806,10 +822,12 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
       }
 
       const fieldNames = Array.from(fieldRestoreValues.keys())
-      const { data: fieldDefs } = await supabase
+      let rollbackFdQuery = supabase
         .from('field_def')
         .select('field_id, field_name')
         .in('field_name', fieldNames)
+      if (projectId != null) rollbackFdQuery = rollbackFdQuery.eq('project_id', projectId)
+      const { data: fieldDefs } = await rollbackFdQuery
 
       const nameToId = new Map((fieldDefs ?? []).map((f: any) => [f.field_name as string, f.field_id as number]))
 
@@ -865,7 +883,7 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
       await supabase.from('document_revision_detail').delete().in('revision_id', laterRevIds)
       await supabase.from('document_revision').delete().in('revision_id', laterRevIds)
 
-      supabase.rpc('refresh_browser_mv').then(() => {})
+      // refresh_browser_mv is a no-op shim in the unified schema
       setMessage(`Revision ${target.revision_number} 으로 롤백 완료 (${upserts.length}개 필드 복원, ${laterRevIds.length}개 이후 revision 삭제)`)
       setRollbackTarget(null)
       await loadRevisionHistory()
