@@ -54,3 +54,6 @@ env/
 # Supabase
 supabase/.temp/
 supabase/.branches/
+
+# Snapshot dumps (재현 가능한 데이터)
+scripts/dump/
