@@ -4,16 +4,31 @@
   "private": true,
   "description": "Supabase SSR client + auth middleware factory + RBAC hooks",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./client": "./src/client.ts",
+    "./admin": "./src/admin.ts",
+    "./middleware": "./src/middleware.ts",
+    "./rbac": "./src/rbac.ts"
+  },
   "scripts": {
     "lint": "echo 'lint placeholder' && exit 0",
     "type-check": "tsc --noEmit",
     "build": "echo 'build placeholder' && exit 0",
     "clean": "rm -rf dist .turbo"
   },
+  "dependencies": {
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.103.3"
+  },
+  "peerDependencies": {
+    "next": ">=16.0.0"
+  },
   "devDependencies": {
     "@gidp/config": "workspace:*",
+    "@types/node": "^20",
+    "next": "^16.2.4",
     "typescript": "^5.7.2"
   }
 }
