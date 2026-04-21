@@ -76,4 +76,11 @@ pip install -e .
 
 세부 Phase 계획은 [PLAN.md](./PLAN.md) 참조.
 
-현재 Phase: **Phase 0 (Monorepo Skeleton)**.
+현재 Phase: **Phase 1 진행 중** — 앱 코드 복사, 통합 인증, Multi-Zones 아키텍처 셋업.
+
+## 문서
+
+- [CLAUDE.md](./CLAUDE.md) — Claude·개발자 공용 작업 가이드 (컨벤션, 아키텍처 규칙, 작업 플로우)
+- [docs/architecture.md](./docs/architecture.md) — 고수준 아키텍처 (Multi-Zones, DB 모델, 인증 흐름)
+- [docs/adr/](./docs/adr/) — 주요 아키텍처 결정 기록 (ADR)
+- [PLAN.md](./PLAN.md) — Phase 로드맵과 데이터 이관 계획

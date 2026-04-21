@@ -169,12 +169,7 @@ git subtree add --prefix=apps/index ../Index        main
 - user_profile/user_project_role 복제 (기존 auth.users 그대로 가져오는 건 Supabase 제약으로 불가 → 비밀번호 재설정 메일 방식 또는 GIDP에서 신규 가입 유도)
 - **실행 후 기존 ISS Supabase 상태 무변화** 검증 (체크섬 비교)
 
-`D:\backup01\Desktop\python\gidp\scripts\snapshot-index-to-gidp.ts`
-- 참고 원본: `D:\backup01\Desktop\python\Index\migrate_to_supabase.py` — 단 기존에는 쓰기였지만 여기서는 **읽기만**
-- 기존 Index Supabase의 `index_records` → GIDP `idx.index_record` (project_id 부여 — "FGIP2-GIDP" 프로젝트 생성)
-- `index_columns` → GIDP `idx.index_column` (사용자와 확인해 `is_tag_core` 플래그 지정)
-- 트리거 backfill 실행 → GIDP `public.tag` 자동 생성
-- 인증 없던 audit_log는 `user_id=NULL` 허용
+~~`D:\backup01\Desktop\python\gidp\scripts\snapshot-index-to-gidp.ts`~~ — **폐기(ADR 0005)**. Index 초기 데이터는 사용자가 `.xlsb` 를 GIDP `apps/index` 업로드 UI 로 직접 올린다. 기존 파이프라인(`idx.index_record` JSONB → 트리거 → `public.tag`)을 그대로 사용하므로 별도 스크립트 불필요.
 
 **기술 수단 후보**:
 - `pg_dump --schema-only` + `pg_dump --data-only --schema=<proj>` (Supabase는 connection string 제공) → 별도 Python/TS 스크립트로 schema/project_id 변환하며 `pg_restore`
@@ -216,23 +211,24 @@ git subtree add --prefix=apps/index ../Index        main
 
 ---
 
-### Phase 2 — Tag Master 통합 (1주)
+### Phase 2 — Tag Master 통합 (1주) — **완료 (2026-04-21, FGIP2)**
 
 **목표**: Index의 200+ 컬럼 중 계장 데이터 핵심 필드를 `public.tag`에 동기화. ISS/Drawings가 동일한 tag를 바라보도록.
 
 액션:
-1. 사용자와 30분 리뷰 — `is_tag_core` 플래그 지정. 권장 기본값:
-   - Tag Number, Service Description, Instrument Type, Signal Type, I/O Type, Loop Number, P&ID Number, Location, Ex Rating, Ex Certification
-2. `idx_record_sync_to_tag()` 트리거 활성화 + 기존 idx.index_record 전체 backfill.
-3. `apps/iss`의 Tag 드롭다운/TagList를 `public.tag` 쿼리로 전환.
-4. `apps/index`에 Tag 상세 페이지 추가 — 해당 Tag에 연결된 ISS document, drawings 링크 표시.
+1. ✅ 사용자 리뷰 — `is_tag_core` 플래그 지정 8개 확정 (Tag Number / Service / Instrument Type / Signal / I/O / Loop / P&ID / Location). `ex_rating`·`ex_certification` 유보 — `docs/adr/0006-is-tag-core-mapping.md`.
+2. ✅ 트리거 `idx_record_sync_to_tag()` 활성화 + `public.idx_backfill_tags(2)` 로 27,603 레코드 replay. `public.tag` 6,727 → 27,608.
+3. ✅ `apps/iss`의 TagList 이미 `public.tag` 기반 (복제 이후 포팅된 상태 그대로 재사용).
+4. ✅ `apps/index/src/app/tag/[tagId]/page.tsx` — Index 전용 Tag 상세. core 필드 + 연결된 ISS documents + 원본 JSONB 표시. Index-only 태그는 "ISS spec sheet 대상 아님" 안내.
 
 재사용 원본:
 - `D:\backup01\Desktop\python\ISS\iss-web\src\components\TagList.tsx` → `packages/ui/TagList.tsx`로 이관, project_id 기반으로 재작성
 
 **검증**:
-- Index에서 Tag Number 수정 후 Save+Commit → 수 초 내 public.tag 반영
-- ISS에서 동일 tag 선택 → Index에서 수정한 Service Description이 반영됨
+- ✅ Index sync 후 샘플 태그(D44-248-AAH-0001 등) 에서 8개 필드 정상 populate
+- ✅ Index-only 태그는 ISS TagList 에서 "No data found" — 설계상 정상 (사용자 확인)
+- Index에서 Tag Number 수정 후 Save+Commit → 수 초 내 public.tag 반영 (추후 회귀 테스트)
+- ISS에서 동일 tag 선택 → Index에서 수정한 Service Description이 반영됨 (추후 회귀 테스트)
 
 ---
 
@@ -364,7 +360,7 @@ Excel 업로드/페이스트 UX는 `D:\backup01\Desktop\python\Index\src\app\Dat
 | Navbar | `ISS\iss-web\src\components\Navbar.tsx` | `packages/ui/Navbar.tsx` |
 | TagList | `ISS\iss-web\src\components\TagList.tsx` | `packages/ui/TagList.tsx` |
 | SQL 스키마 | `ISS\sql\01_*.sql` ~ `03_*.sql` | `gidp/supabase/migrations/001~003` (schema 재명명) |
-| Index 이관 원본 | `Index\migrate_to_supabase.py` | `gidp/scripts/migrate-index-to-gidp.ts` |
+| ~~Index 이관 원본~~ | ~~`Index\migrate_to_supabase.py`~~ | **폐기(ADR 0005)** — 사용자 `.xlsb` 업로드로 대체 |
 | DataGrid 카피페이스트 | `Index\src\app\DataGrid.tsx` | `packages/ui/DataGrid.tsx` + `apps/drawings` 편집기 |
 | Excel 업로드 | `Index\src\app\UploadModal.tsx` | `apps/drawings/src/app/upload/` |
 | Revision 로직 | `ISS\iss-web` document_revision UI | `packages/domain/revision.ts` (Drawings 공용) |
@@ -413,7 +409,7 @@ pnpm dev                # apps/iss, apps/index, apps/drawings 3개 동시 기동
 - `gidp/package.json`, `gidp/pnpm-workspace.yaml`, `gidp/turbo.json`, `gidp/.npmrc`
 - `gidp/supabase/migrations/001_public_master.sql` ~ `006_triggers.sql`
 - `gidp/packages/auth/src/index.ts`, `gidp/packages/ui/src/index.ts`, `gidp/packages/domain/src/index.ts`
-- `gidp/scripts/migrate-iss-to-gidp.ts`, `gidp/scripts/migrate-index-to-gidp.ts`
+- `gidp/scripts/snapshot-iss-to-gidp.ts` (Index snapshot 은 ADR 0005 로 폐기 — `.xlsb` 업로드로 대체)
 - `gidp/apps/drawings/` 전체
 - `gidp/services/drawing-gen/` 전체 (Python FastAPI + ezdxf)
 - `gidp/services/drawing-gen/templates/blocks/*.dxf` (GS 표준 block)
