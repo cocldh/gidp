@@ -1,0 +1,19 @@
+{
+  "name": "@gidp/auth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Supabase SSR client + auth middleware factory + RBAC hooks",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "echo 'lint placeholder' && exit 0",
+    "type-check": "tsc --noEmit",
+    "build": "echo 'build placeholder' && exit 0",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "@gidp/config": "workspace:*",
+    "typescript": "^5.7.2"
+  }
+}

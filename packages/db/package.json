@@ -1,0 +1,19 @@
+{
+  "name": "@gidp/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Generated Supabase TS types + typed query helpers",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "echo 'lint placeholder' && exit 0",
+    "type-check": "tsc --noEmit",
+    "build": "echo 'build placeholder' && exit 0",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "@gidp/config": "workspace:*",
+    "typescript": "^5.7.2"
+  }
+}
