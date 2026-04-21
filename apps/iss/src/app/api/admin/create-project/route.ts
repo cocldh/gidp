@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { PROJECT_CODE_REGEX } from '@gidp/domain/public'
 import { createClient } from '@/lib/supabase-server'
 import { createAdminClient } from '@/lib/supabase-admin'
 
@@ -23,6 +24,13 @@ export async function POST(req: NextRequest) {
 
   if (!project_code || !project_name) {
     return NextResponse.json({ error: 'project_code와 project_name은 필수입니다' }, { status: 400 })
+  }
+
+  if (!PROJECT_CODE_REGEX.test(project_code)) {
+    return NextResponse.json(
+      { error: 'project_code 형식이 올바르지 않습니다. e|p + 숫자 6자리 (예: e230350)' },
+      { status: 400 },
+    )
   }
 
   // 3. SECURITY DEFINER RPC: insert public.project + seed iss.field_def from default_field_def

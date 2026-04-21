@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3002",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start -p 3002",
+    "lint": "eslint",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@gidp/auth": "workspace:*",
+    "@gidp/domain": "workspace:*",
+    "@gidp/ui": "workspace:*",
+    "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.103.3",
     "ag-grid-community": "^31.3.2",
     "ag-grid-react": "^31.3.2",
@@ -20,6 +25,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@gidp/config": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

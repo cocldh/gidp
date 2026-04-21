@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { PROJECT_CODE_REGEX } from '@gidp/domain/public'
 import Navbar from '@/components/Navbar'
 import RoleGuard from '@/components/RoleGuard'
 import { createClient } from '@/lib/supabase-client'
@@ -51,6 +52,13 @@ function ProjectsContent() {
 
   async function createProject() {
     if (!code.trim() || !name.trim()) return
+
+    const normalizedCode = code.trim().toLowerCase()
+    if (!PROJECT_CODE_REGEX.test(normalizedCode)) {
+      setResult({ ok: false, msg: 'Project code 형식: e|p + 숫자 6자리 (예: e230350)' })
+      return
+    }
+
     setCreating(true)
     setResult(null)
 
@@ -58,7 +66,7 @@ function ProjectsContent() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        project_code: code.trim().toLowerCase(),
+        project_code: normalizedCode,
         project_name: name.trim(),
         description:  desc.trim() || null,
       }),
@@ -95,12 +103,20 @@ function ProjectsContent() {
             <label className="block text-xs text-gray-500 mb-1">Project Code <span className="text-red-500">*</span></label>
             <input
               type="text"
-              placeholder="예: project_a"
+              placeholder="예: e230350"
               value={code}
-              onChange={e => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              maxLength={7}
+              onChange={e => {
+                const v = e.target.value.toLowerCase()
+                const first = v.slice(0, 1).replace(/[^ep]/g, '')
+                const rest = v.slice(1).replace(/[^0-9]/g, '').slice(0, 6)
+                setCode(first + rest)
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono"
             />
-            <p className="text-xs text-gray-400 mt-1">소문자·숫자·언더바만 사용 가능</p>
+            <p className="text-xs text-gray-400 mt-1">
+              첫 글자 <span className="font-mono">e</span>(execution) 또는 <span className="font-mono">p</span>(proposal) + 숫자 6자리
+            </p>
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">Project Name <span className="text-red-500">*</span></label>

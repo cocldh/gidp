@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save } from "lucide-react";
+import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
-import { supabase } from "./supabase";
+import { RoleGuard } from "@gidp/ui";
+import { createClient, readProjectIdCookie } from "@/lib/supabase-client";
 import UploadModal from "./UploadModal";
 import ChangeLogPanel from "./ChangeLogPanel";
 
 const DataGrid = dynamic(() => import("./DataGrid"), { ssr: false });
 
 interface Favorite {
+  id: number;
   name: string;
   hiddenFields: string[];
 }
@@ -18,20 +20,66 @@ interface Favorite {
 interface PendingChange {
   recordId: number;
   fieldName: string;
-  originalValue: any;
-  currentValue: any;
+  originalValue: unknown;
+  currentValue: unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rowNode: any;
 }
 
 interface UndoEntry {
   recordId: number;
   fieldName: string;
-  oldValue: any;
+  oldValue: unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rowNode: any;
 }
 
 export default function Home() {
+  return <HomeShell />;
+}
+
+function HomeShell() {
+  const [projectId, setProjectId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setProjectId(readProjectIdCookie());
+  }, []);
+
+  if (projectId == null) {
+    return <ProjectMissing />;
+  }
+
+  return (
+    <RoleGuard projectId={projectId} module="idx" minAccess="Viewer">
+      <HomeContent projectId={projectId} />
+    </RoleGuard>
+  );
+}
+
+function ProjectMissing() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="bg-white rounded-xl shadow p-8 text-center max-w-md">
+        <FolderKanban className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+        <h2 className="text-lg font-semibold text-gray-800 mb-2">No project selected</h2>
+        <p className="text-sm text-gray-500 mb-4">프로젝트를 선택한 후 계속 진행하세요.</p>
+        <a
+          href="/project"
+          className="inline-block px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+        >
+          프로젝트 선택
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function HomeContent({ projectId }: { projectId: number }) {
+  const baseSupabase = useMemo(() => createClient(), []);
+  const idx = useMemo(() => baseSupabase.schema("idx"), [baseSupabase]);
+
   const [columns, setColumns] = useState<ColDef[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [rowData, setRowData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -52,28 +100,57 @@ export default function Home() {
   const changedCellsRef = useRef<Set<string>>(new Set());
   const [uncommittedCount, setUncommittedCount] = useState(0);
 
-  // Pending changes & undo
   const pendingChanges = useRef<Map<string, PendingChange>>(new Map());
   const undoStack = useRef<UndoEntry[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const isUndoing = useRef(false);
 
-  // Load favorites from Supabase
+  // Load favorites for this project
   useEffect(() => {
-    supabase.from("index_favorites").select("name, hidden_fields").order("created_at")
+    idx
+      .from("index_favorite")
+      .select("id, name, hidden_fields")
+      .eq("project_id", projectId)
+      .order("created_at")
       .then(({ data }) => {
-        if (data) setFavorites(data.map((r) => ({ name: r.name, hiddenFields: r.hidden_fields })));
+        if (data) {
+          setFavorites(
+            (data as { id: number; name: string; hidden_fields: string[] }[]).map((r) => ({
+              id: r.id,
+              name: r.name,
+              hiddenFields: r.hidden_fields ?? [],
+            })),
+          );
+        }
       });
-  }, []);
+  }, [idx, projectId]);
 
   const saveFavorite = async () => {
     const name = savingName.trim();
     if (!name) return;
     const hidden = Array.from(hiddenFields);
-    await supabase.from("index_favorites").upsert({ name, hidden_fields: hidden }, { onConflict: "name" });
-    const updated = [...favorites.filter((f) => f.name !== name), { name, hiddenFields: hidden }];
-    setFavorites(updated);
+    const { data: { user } } = await baseSupabase.auth.getUser();
+    const { data } = await idx
+      .from("index_favorite")
+      .upsert(
+        {
+          project_id: projectId,
+          name,
+          hidden_fields: hidden,
+          created_by: user?.id ?? null,
+        },
+        { onConflict: "project_id,name" },
+      )
+      .select("id, name, hidden_fields")
+      .single();
+    if (data) {
+      const row = data as { id: number; name: string; hidden_fields: string[] };
+      setFavorites((prev) => [
+        ...prev.filter((f) => f.name !== row.name),
+        { id: row.id, name: row.name, hiddenFields: row.hidden_fields ?? [] },
+      ]);
+    }
     setSavingName("");
     setShowSaveInput(false);
   };
@@ -82,17 +159,15 @@ export default function Home() {
     setHiddenFields(new Set(fav.hiddenFields));
   };
 
-  const deleteFavorite = async (name: string) => {
-    await supabase.from("index_favorites").delete().eq("name", name);
-    setFavorites((prev) => prev.filter((f) => f.name !== name));
+  const deleteFavorite = async (fav: Favorite) => {
+    await idx.from("index_favorite").delete().eq("id", fav.id);
+    setFavorites((prev) => prev.filter((f) => f.id !== fav.id));
   };
 
-  // Dark mode toggle
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
 
-  // Close panel when clicking outside
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
@@ -104,7 +179,6 @@ export default function Home() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showColumnPanel]);
 
-  // Load data from Supabase
   const loadData = useCallback(async () => {
     setLoading(true);
     setHiddenFields(new Set());
@@ -112,24 +186,44 @@ export default function Home() {
     undoStack.current = [];
     setPendingCount(0);
 
-    const { data: colData, error: colError } = await supabase
-      .from("index_columns")
+    const { data: colData, error: colError } = await idx
+      .from("index_column")
       .select("column_name, order_index")
+      .eq("project_id", projectId)
       .order("order_index");
 
-    if (colError) { console.error(colError); setLoading(false); return; }
+    if (colError) {
+      console.error("index_column query failed:", {
+        message: colError.message,
+        code: colError.code,
+        details: colError.details,
+        hint: colError.hint,
+      });
+      setLoading(false);
+      return;
+    }
 
-    const colNames = (colData ?? []).map((c) => c.column_name as string);
+    const colNames = ((colData as { column_name: string }[] | null) ?? []).map((c) => c.column_name);
 
     const PAGE = 1000;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let allRows: any[] = [];
     let from = 0;
     while (true) {
-      const { data, error } = await supabase.from("index_records").select("id, data").range(from, from + PAGE - 1).order("id");
-      if (error?.message) { console.error(error); break; }
+      const { data, error } = await idx
+        .from("index_record")
+        .select("id, data")
+        .eq("project_id", projectId)
+        .range(from, from + PAGE - 1)
+        .order("id");
+      if (error?.message) {
+        console.error(error);
+        break;
+      }
       if (!data || data.length === 0) break;
-      // id를 마지막에 덮어써서 JSONB 내 id 필드에 의해 덮어쓰이지 않도록 함
-      allRows = allRows.concat(data.map((r) => ({ ...r.data, id: r.id })));
+      allRows = allRows.concat(
+        (data as { id: number; data: Record<string, unknown> }[]).map((r) => ({ ...r.data, id: r.id })),
+      );
       if (data.length < PAGE) break;
       from += PAGE;
     }
@@ -138,7 +232,7 @@ export default function Home() {
     const PADDING = 28;
     const MIN_W = 60;
     const MAX_W = 400;
-    const CACHE_KEY = "index_col_widths";
+    const CACHE_KEY = `index_col_widths_${projectId}`;
 
     const cached = localStorage.getItem(CACHE_KEY);
     let widthMap: Record<string, number>;
@@ -147,7 +241,9 @@ export default function Home() {
       widthMap = JSON.parse(cached);
     } else {
       const maxLen: Record<string, number> = {};
-      colNames.forEach((col) => { maxLen[col] = col.length; });
+      colNames.forEach((col) => {
+        maxLen[col] = col.length;
+      });
       for (const row of allRows) {
         for (const col of colNames) {
           const len = row[col] != null ? String(row[col]).length : 0;
@@ -169,21 +265,32 @@ export default function Home() {
       sortable: true,
       width: widthMap[col] ?? 150,
     }));
-    cols.unshift({ field: "id", headerName: "ID", editable: false, filter: true, sortable: true, width: 80, pinned: "left" } as any);
+    cols.unshift({
+      field: "id",
+      headerName: "ID",
+      editable: false,
+      filter: true,
+      sortable: true,
+      width: 80,
+      pinned: "left",
+    } as ColDef);
     setColumns(cols);
     setRowData(allRows);
 
-    // Load uncommitted changed cells from audit log (paginated)
+    // Load uncommitted changed cells from audit log
     const changedSet = new Set<string>();
     let auditFrom = 0;
     while (true) {
-      const { data: auditChunk } = await supabase
-        .from("index_audit_logs")
+      const { data: auditChunk } = await idx
+        .from("index_audit_log")
         .select("record_id, column_name")
+        .eq("project_id", projectId)
         .eq("committed", false)
         .range(auditFrom, auditFrom + 999);
       if (!auditChunk || auditChunk.length === 0) break;
-      for (const r of auditChunk) changedSet.add(`${r.record_id}_${r.column_name}`);
+      for (const r of auditChunk as { record_id: number; column_name: string }[]) {
+        changedSet.add(`${r.record_id}_${r.column_name}`);
+      }
       if (auditChunk.length < 1000) break;
       auditFrom += 1000;
     }
@@ -191,18 +298,19 @@ export default function Home() {
     setUncommittedCount(changedSet.size);
 
     setLoading(false);
-  }, []);
+  }, [idx, projectId]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  // Buffer edits — don't save to DB immediately
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const onCellValueChanged = (event: any) => {
     const { data, colDef, oldValue, newValue } = event;
     const fieldName = colDef.field;
     const recordId = data.id;
     if (oldValue === newValue || fieldName === "id") return;
 
-    // Triggered by undo — skip pushing to undoStack
     if (isUndoing.current) {
       isUndoing.current = false;
       return;
@@ -213,14 +321,19 @@ export default function Home() {
     undoStack.current.push({ recordId, fieldName, oldValue, rowNode: event.node });
 
     if (!existing) {
-      pendingChanges.current.set(key, { recordId, fieldName, originalValue: oldValue, currentValue: newValue, rowNode: event.node });
+      pendingChanges.current.set(key, {
+        recordId,
+        fieldName,
+        originalValue: oldValue,
+        currentValue: newValue,
+        rowNode: event.node,
+      });
     } else {
       existing.currentValue = newValue;
     }
     setPendingCount(pendingChanges.current.size);
   };
 
-  // Undo last edit (Ctrl+Z)
   const handleUndo = useCallback(() => {
     const last = undoStack.current.pop();
     if (!last) return;
@@ -240,28 +353,35 @@ export default function Home() {
     last.rowNode.setDataValue(last.fieldName, last.oldValue);
   }, []);
 
-
-  // Commit: mark current state as new baseline (clear yellow highlights)
   const handleCommit = async (description: string) => {
-    const { error } = await supabase
-      .from("index_audit_logs")
+    const { error } = await idx
+      .from("index_audit_log")
       .update({ committed: true, commit_description: description.trim() || null })
+      .eq("project_id", projectId)
       .eq("committed", false);
     if (!error) {
+      // Also mark all uncommitted records as committed
+      await idx
+        .from("index_record")
+        .update({ is_committed: true })
+        .eq("project_id", projectId)
+        .eq("is_committed", false);
       changedCellsRef.current.clear();
       setUncommittedCount(0);
       gridApiRef.current?.refreshCells({ force: true });
     }
   };
 
-  // Save all pending changes to DB
   const saveChanges = async () => {
     if (pendingChanges.current.size === 0) return;
     setIsSaving(true);
 
+    const { data: { user } } = await baseSupabase.auth.getUser();
+    const userId = user?.id ?? null;
+
     const allChanges = Array.from(pendingChanges.current.values());
 
-    // Group by recordId — save each record once with all pending edits
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const recordNodes = new Map<number, any>();
     for (const change of allChanges) {
       recordNodes.set(change.recordId, change.rowNode);
@@ -270,20 +390,24 @@ export default function Home() {
     for (const [recordId, rowNode] of recordNodes) {
       const rowData = { ...rowNode.data };
       delete rowData.id;
-      const { error } = await supabase.from("index_records").update({ data: rowData }).eq("id", recordId);
+      const { error } = await idx
+        .from("index_record")
+        .update({ data: rowData, is_committed: false })
+        .eq("id", recordId)
+        .eq("project_id", projectId);
       if (error) console.error(error);
     }
 
-    // Insert audit log entries (committed=false — baseline not yet set)
     for (const change of allChanges) {
       const tagNumber = change.rowNode.data["1_TAG NUMBER"] ?? null;
-      await supabase.from("index_audit_logs").insert({
+      await idx.from("index_audit_log").insert({
+        project_id: projectId,
         record_id: change.recordId,
         tag_number: tagNumber != null ? String(tagNumber) : null,
         column_name: change.fieldName,
         old_value: change.originalValue != null ? String(change.originalValue) : null,
         new_value: change.currentValue != null ? String(change.currentValue) : null,
-        changed_by: "User",
+        changed_by: userId,
         committed: false,
       });
       changedCellsRef.current.add(`${change.recordId}_${change.fieldName}`);
@@ -298,15 +422,30 @@ export default function Home() {
   };
 
   const exportExcel = async () => {
-    const { data, error } = await supabase.from("index_records").select("data").order("id");
+    const { data, error } = await idx
+      .from("index_record")
+      .select("data")
+      .eq("project_id", projectId)
+      .order("id");
     if (error || !data) return;
     const colNames = columns.filter((c) => c.field !== "id").map((c) => c.field as string);
-    const rows = data.map((r) => { const obj: any = {}; colNames.forEach((col) => { obj[col] = r.data[col] ?? null; }); return obj; });
+    const rows = (data as { data: Record<string, unknown> }[]).map((r) => {
+      const obj: Record<string, unknown> = {};
+      colNames.forEach((col) => {
+        obj[col] = r.data[col] ?? null;
+      });
+      return obj;
+    });
     const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet(rows, { header: colNames });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Master Index");
     XLSX.writeFile(wb, "Master_Index_export.xlsx");
+  };
+
+  const handleSignOut = async () => {
+    await baseSupabase.auth.signOut();
+    window.location.assign('/login');
   };
 
   const toggleColumn = (field: string) => {
@@ -323,7 +462,8 @@ export default function Home() {
   const hiddenCount = hiddenFields.size;
   const visibleColumns = columns.map((c) => ({ ...c, hide: hiddenFields.has(c.field as string) }));
 
-  const btnBase = "flex items-center gap-2 border px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-200";
+  const btnBase =
+    "flex items-center gap-2 border px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-200";
 
   return (
     <div className="flex flex-col h-screen bg-[#f7f4ef] dark:bg-slate-900 text-gray-900 dark:text-slate-100 p-6">
@@ -341,19 +481,19 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Dark Mode */}
           <button onClick={() => setDarkMode((v) => !v)} className={`${btnBase} hover:border-indigo-400`}>
             {darkMode ? <Sun size={16} /> : <Moon size={16} />}
             {darkMode ? "Light" : "Dark"}
           </button>
 
-          {/* Clear Filters */}
-          <button onClick={() => gridApiRef.current?.setFilterModel(null)} className={`${btnBase} hover:border-red-400 hover:text-red-500`}>
+          <button
+            onClick={() => gridApiRef.current?.setFilterModel(null)}
+            className={`${btnBase} hover:border-red-400 hover:text-red-500`}
+          >
             <FilterX size={16} />
             Clear Filters
           </button>
 
-          {/* Columns Panel */}
           <div className="relative" ref={panelRef}>
             <button onClick={() => setShowColumnPanel((v) => !v)} className={`${btnBase} hover:border-blue-400`}>
               <Columns size={16} />
@@ -367,8 +507,6 @@ export default function Home() {
 
             {showColumnPanel && (
               <div className="absolute right-0 top-10 z-50 w-80 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl shadow-lg p-3 flex flex-col gap-2">
-
-                {/* Favorites Section */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wide flex items-center gap-1">
@@ -382,7 +520,6 @@ export default function Home() {
                     </button>
                   </div>
 
-                  {/* Save input */}
                   {showSaveInput && (
                     <div className="flex gap-1 mb-1.5">
                       <input
@@ -403,11 +540,13 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Favorites list */}
                   {favorites.length > 0 ? (
                     <div className="space-y-0.5 mb-1">
                       {favorites.map((fav) => (
-                        <div key={fav.name} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 group">
+                        <div
+                          key={fav.id}
+                          className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 group"
+                        >
                           <button
                             onClick={() => applyFavorite(fav)}
                             className="flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300 flex-1 text-left"
@@ -421,7 +560,7 @@ export default function Home() {
                             </span>
                           </button>
                           <button
-                            onClick={() => deleteFavorite(fav.name)}
+                            onClick={() => deleteFavorite(fav)}
                             className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 ml-1"
                           >
                             <Trash2 size={12} />
@@ -435,7 +574,6 @@ export default function Home() {
                 </div>
 
                 <div className="border-t border-gray-100 dark:border-slate-700 pt-2">
-                  {/* Search */}
                   <div className="flex items-center gap-2 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-1.5 mb-2">
                     <Search size={14} className="text-gray-400 shrink-0" />
                     <input
@@ -447,21 +585,33 @@ export default function Home() {
                     />
                   </div>
 
-                  {/* Show/Hide all */}
                   <div className="flex gap-2 mb-2">
-                    <button onClick={() => setHiddenFields(new Set())} className="flex-1 text-xs py-1 rounded-md bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-600 dark:text-slate-300">
+                    <button
+                      onClick={() => setHiddenFields(new Set())}
+                      className="flex-1 text-xs py-1 rounded-md bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-600 dark:text-slate-300"
+                    >
                       Show all
                     </button>
-                    <button onClick={() => setHiddenFields(new Set(allFields))} className="flex-1 text-xs py-1 rounded-md bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-600 dark:text-slate-300">
+                    <button
+                      onClick={() => setHiddenFields(new Set(allFields))}
+                      className="flex-1 text-xs py-1 rounded-md bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-600 dark:text-slate-300"
+                    >
                       Hide all
                     </button>
                   </div>
 
-                  {/* Column list */}
                   <div className="max-h-64 overflow-y-auto space-y-0.5">
                     {filteredFields.map((field) => (
-                      <label key={field} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer">
-                        <input type="checkbox" checked={!hiddenFields.has(field)} onChange={() => toggleColumn(field)} className="accent-blue-500" />
+                      <label
+                        key={field}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!hiddenFields.has(field)}
+                          onChange={() => toggleColumn(field)}
+                          className="accent-blue-500"
+                        />
                         <span className="text-sm text-gray-700 dark:text-slate-300 truncate">{field}</span>
                       </label>
                     ))}
@@ -484,7 +634,6 @@ export default function Home() {
             Upload
           </button>
 
-          {/* Save Changes */}
           {pendingCount > 0 && (
             <button
               onClick={() => saveChanges()}
@@ -499,9 +648,34 @@ export default function Home() {
             </button>
           )}
 
-          <button onClick={exportExcel} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+          <button
+            onClick={exportExcel}
+            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
             <Download size={16} />
             Export to Excel
+          </button>
+
+          <a
+            href="/"
+            className={`${btnBase} hover:border-blue-400`}
+            title="GIDP Dashboard"
+          >
+            ← GIDP
+          </a>
+
+          <a
+            href="/project"
+            className={`${btnBase} hover:border-blue-400`}
+            title="프로젝트 전환"
+          >
+            <FolderKanban size={16} />
+            Project
+          </a>
+
+          <button onClick={handleSignOut} className={`${btnBase} hover:border-red-400 hover:text-red-500`}>
+            <LogOut size={16} />
+            Sign Out
           </button>
         </div>
       </div>
@@ -518,14 +692,34 @@ export default function Home() {
         ) : null}
 
         {columns.length > 0 ? (
-          <DataGrid columns={visibleColumns} rowData={rowData} onCellValueChanged={onCellValueChanged} onGridReady={(api) => { gridApiRef.current = api; }} isChangedCell={(recordId, colName) => changedCellsRef.current.has(`${recordId}_${colName}`)} onUndo={handleUndo} />
+          <DataGrid
+            columns={visibleColumns}
+            rowData={rowData}
+            onCellValueChanged={onCellValueChanged}
+            onGridReady={(api) => {
+              gridApiRef.current = api;
+            }}
+            isChangedCell={(recordId, colName) => changedCellsRef.current.has(`${recordId}_${colName}`)}
+            onUndo={handleUndo}
+          />
         ) : (
           !loading && <div className="w-full h-full flex items-center justify-center text-gray-400">No data available</div>
         )}
       </div>
 
-      <UploadModal open={showUpload} onClose={() => setShowUpload(false)} onUploadComplete={loadData} />
-      <ChangeLogPanel open={showChangeLog} onClose={() => setShowChangeLog(false)} uncommittedCount={uncommittedCount} onCommit={handleCommit} />
+      <UploadModal
+        open={showUpload}
+        projectId={projectId}
+        onClose={() => setShowUpload(false)}
+        onUploadComplete={loadData}
+      />
+      <ChangeLogPanel
+        open={showChangeLog}
+        projectId={projectId}
+        onClose={() => setShowChangeLog(false)}
+        uncommittedCount={uncommittedCount}
+        onCommit={handleCommit}
+      />
     </div>
   );
 }

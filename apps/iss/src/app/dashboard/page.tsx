@@ -3,10 +3,15 @@ import { createClient, getServerProjectId } from '@/lib/supabase-server'
 import Navbar from '@/components/Navbar'
 import TagList from '@/components/TagList'
 
+// /login, /pending, /project live on shell (same public origin). Path-only
+// redirects resolve against the current request's origin which, via the
+// shell's multi-zone rewrite, is the shell host. basePath is not prepended
+// by Next's server redirect() for origin-relative paths.
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  // Middleware ensures user is authenticated before reaching here.
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
@@ -17,12 +22,11 @@ export default async function DashboardPage() {
 
   if (!profile || profile.role === 'Pending') redirect('/pending')
 
-  let projectId: number | null = null
+  // Middleware also guarantees gidp_project_id cookie is present.
+  const projectId = await getServerProjectId()
+  if (projectId == null) redirect('/project')
 
   if (profile.role !== 'Admin') {
-    projectId = await getServerProjectId()
-    if (projectId == null) redirect('/project')
-
     const { data: upr } = await supabase
       .from('user_project_role')
       .select('role')
@@ -31,9 +35,6 @@ export default async function DashboardPage() {
       .maybeSingle()
 
     if (!upr) redirect('/project')
-  } else {
-    projectId = await getServerProjectId()
-    if (projectId == null) redirect('/project')
   }
 
   return (

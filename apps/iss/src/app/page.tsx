@@ -1,13 +1,7 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase-server'
 
-export default async function Home() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (user) {
-    redirect('/project')
-  } else {
-    redirect('/login')
-  }
+// Shell owns auth/project selection. Middleware redirects unauth'd users
+// to the shell and bounces them back here after a project is picked.
+export default function Home() {
+  redirect('/dashboard')
 }

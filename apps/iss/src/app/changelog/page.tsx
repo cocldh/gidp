@@ -66,7 +66,9 @@ export default function ChangelogPage() {
   useEffect(() => {
     async function ensureUser() {
       const { data: { user } } = await baseSupabase.auth.getUser()
-      if (!user) router.push('/login')
+      if (!user) {
+        window.location.assign('/login')
+      }
     }
     ensureUser()
   }, [baseSupabase, router])

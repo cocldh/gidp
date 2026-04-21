@@ -5,9 +5,18 @@ export const ProjectRoleEnum = z.enum(['ProjectAdmin', 'Editor', 'Viewer']);
 export const ModuleNameEnum = z.enum(['iss', 'idx', 'drawings']);
 export const ModuleAccessEnum = z.enum(['None', 'Viewer', 'Editor', 'Admin']);
 
+/**
+ * Project code format: single letter prefix (e=execution, p=proposal) + 6 digits.
+ * Mirrors the `project_code_format_chk` CHECK constraint on public.project.
+ */
+export const PROJECT_CODE_REGEX = /^[ep]\d{6}$/;
+export const projectCodeSchema = z
+  .string()
+  .regex(PROJECT_CODE_REGEX, 'Project code 형식: e|p + 숫자 6자리 (예: e230350)');
+
 export const ProjectSchema = z.object({
   project_id: z.number().int().positive(),
-  project_code: z.string().min(1),
+  project_code: projectCodeSchema,
   project_name: z.string().min(1),
   description: z.string().nullable().optional(),
   created_at: z.string().datetime().optional(),

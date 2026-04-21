@@ -11,6 +11,14 @@ export interface AuthMiddlewareConfig {
    * '/api/auth/', '/api/debug'. Extend via this field per app.
    */
   extraPublicPaths?: string[];
+  /**
+   * Cookie name that must be present for an authenticated user to proceed.
+   * If set and the cookie is missing, the user is bounced to the project
+   * selection route. Typically `gidp_project_id`.
+   */
+  requireProjectCookie?: string;
+  /** Path for project selection. Default: '/project'. */
+  projectSelectPath?: string;
 }
 
 const DEFAULT_PUBLIC_PATHS = ['/login', '/auth', '/api/auth/', '/api/debug'];
@@ -18,7 +26,9 @@ const DEFAULT_PUBLIC_PATHS = ['/login', '/auth', '/api/auth/', '/api/debug'];
 export function createAuthMiddleware(config: AuthMiddlewareConfig = {}) {
   const loginPath = config.loginPath ?? '/login';
   const postLoginPath = config.postLoginPath ?? '/';
+  const projectSelectPath = config.projectSelectPath ?? '/project';
   const publicPaths = [...DEFAULT_PUBLIC_PATHS, ...(config.extraPublicPaths ?? [])];
+  const requireProjectCookie = config.requireProjectCookie;
 
   return async function middleware(request: NextRequest) {
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
@@ -55,17 +65,32 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig = {}) {
 
     const path = request.nextUrl.pathname;
     const isPublic = publicPaths.some((prefix) => path.startsWith(prefix));
+    const returnToPath = request.nextUrl.pathname + request.nextUrl.search;
+
+    // Next.js middleware requires an absolute URL in Location. We construct it
+    // from request.nextUrl so the redirect resolves against the *public* origin
+    // the browser actually sent (e.g. http://localhost:3000), not a zone's
+    // internal origin. In multi-zone production, if a zone's middleware ever
+    // needs to redirect cross-origin, pass the public origin via a header/env.
+    const redirectTo = (path: string) =>
+      NextResponse.redirect(new URL(path, request.nextUrl));
 
     if (!session && !isPublic) {
-      const url = request.nextUrl.clone();
-      url.pathname = loginPath;
-      return NextResponse.redirect(url);
+      return redirectTo(`${loginPath}?return_to=${encodeURIComponent(returnToPath)}`);
     }
 
     if (session && path.startsWith(loginPath)) {
-      const url = request.nextUrl.clone();
-      url.pathname = postLoginPath;
-      return NextResponse.redirect(url);
+      return redirectTo(postLoginPath);
+    }
+
+    if (
+      session &&
+      !isPublic &&
+      requireProjectCookie &&
+      !request.cookies.get(requireProjectCookie) &&
+      !path.startsWith(projectSelectPath)
+    ) {
+      return redirectTo(`${projectSelectPath}?return_to=${encodeURIComponent(returnToPath)}`);
     }
 
     return supabaseResponse;

@@ -1,15 +1,16 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from '@/components/RoleGuard'
 import type { UserProfile } from '@/lib/types'
 
+// Links back to the shell (same public origin). Raw <a> + absolute path
+// bypasses Next's basePath prepending so '/' goes to shell dashboard,
+// not /iss/. window.location.assign has the same behavior.
 export default function Navbar() {
   const supabase = createClient()
-  const router = useRouter()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [projectName, setProjectName] = useState<string>('')
   const { globalRole, effectiveAccess, hasRole } = useUserRole()
@@ -46,7 +47,7 @@ export default function Navbar() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    router.push('/login')
+    window.location.assign('/login')
   }
 
   const isGlobalAdmin = globalRole === 'Admin'
@@ -57,8 +58,15 @@ export default function Navbar() {
     <nav className="bg-gray-900 text-white px-4 py-3">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-6">
+          <a
+            href="/"
+            className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+            title="GIDP Dashboard"
+          >
+            ← GIDP
+          </a>
           <Link href="/dashboard" className="text-lg font-bold">
-            ISS Web
+            ISS
           </Link>
           <div className="hidden md:flex items-center gap-4 text-sm">
             <Link href="/dashboard" className="hover:text-gray-300">
@@ -101,7 +109,7 @@ export default function Navbar() {
         </div>
         <div className="flex items-center gap-3 text-sm">
           {projectName && (
-            <Link
+            <a
               href="/project"
               className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-blue-800 hover:bg-blue-700 rounded text-xs text-blue-200"
               title="프로젝트 전환"
@@ -109,7 +117,7 @@ export default function Navbar() {
               <span>📁</span>
               <span className="max-w-32 truncate">{projectName}</span>
               <span className="text-blue-400 text-xs">▼</span>
-            </Link>
+            </a>
           )}
           {profile && (
             <span className="hidden sm:inline text-gray-400">
