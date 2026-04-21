@@ -2,18 +2,37 @@
   "name": "@gidp/ui",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared React UI primitives (Navbar, RoleGuard, TagList, DataGrid)",
+  "description": "Shared React UI primitives (Navbar, RoleGuard, TagList)",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./navbar": "./src/Navbar.tsx",
+    "./role-guard": "./src/RoleGuard.tsx",
+    "./tag-list": "./src/TagList.tsx",
+    "./use-user-role": "./src/useUserRole.ts"
+  },
   "scripts": {
     "lint": "echo 'lint placeholder' && exit 0",
     "type-check": "tsc --noEmit",
     "build": "echo 'build placeholder' && exit 0",
     "clean": "rm -rf dist .turbo"
   },
+  "dependencies": {
+    "@gidp/auth": "workspace:*"
+  },
+  "peerDependencies": {
+    "next": ">=16.0.0",
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  },
   "devDependencies": {
     "@gidp/config": "workspace:*",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "next": "^16.2.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "typescript": "^5.7.2"
   }
 }
