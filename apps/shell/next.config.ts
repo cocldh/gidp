@@ -20,11 +20,19 @@ function zoneRewrites(prefix: string, origin: string) {
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    return [
-      ...zoneRewrites("/iss", ISS_ZONE),
-      ...zoneRewrites("/index", INDEX_ZONE),
-      ...zoneRewrites("/drawings", DRAWINGS_ZONE),
-    ];
+    // beforeFiles: zone rewrites must run before Next.js's filesystem
+    // routing. Otherwise `/index` is normalized to `/` (Next.js treats
+    // `index` as the root page alias) and the rewrite never fires,
+    // so shell's homepage answers /index instead of the index zone.
+    return {
+      beforeFiles: [
+        ...zoneRewrites("/iss", ISS_ZONE),
+        ...zoneRewrites("/index", INDEX_ZONE),
+        ...zoneRewrites("/drawings", DRAWINGS_ZONE),
+      ],
+      afterFiles: [],
+      fallback: [],
+    };
   },
 };
 
