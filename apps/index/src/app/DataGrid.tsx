@@ -5,6 +5,7 @@ import { AgGridReact } from "ag-grid-react";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-alpine.css";
 import type { ColDef, GridApi, CellFocusedEvent } from "ag-grid-community";
+import ExcelStyleFilter from "./ExcelStyleFilter";
 
 interface DataGridProps {
   columns: ColDef[];
@@ -353,11 +354,12 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
         suppressRowClickSelection={true}
         animateRows={true}
         suppressHorizontalScroll={false}
+        alwaysShowVerticalScroll={true}
         {...{ suppressUndoRedoCellEditing: true } as any}
         defaultColDef={{
           resizable: true,
           sortable: true,
-          filter: true,
+          filter: ExcelStyleFilter,
           cellStyle: (params) => {
             const rowIdx = params.node.rowIndex ?? -1;
             const allCols = gridApiRef.current?.getAllDisplayedColumns() ?? [];

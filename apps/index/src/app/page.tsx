@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban } from "lucide-react";
+import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
 import { RoleGuard } from "@gidp/ui";
 import { createClient, readProjectIdCookie } from "@/lib/supabase-client";
@@ -97,6 +97,10 @@ function HomeContent({ projectId }: { projectId: number }) {
 
   const [showUpload, setShowUpload] = useState(false);
   const [showChangeLog, setShowChangeLog] = useState(false);
+
+  const [colJumpQuery, setColJumpQuery] = useState("");
+  const [colJumpMatches, setColJumpMatches] = useState<string[]>([]);
+  const [colJumpIdx, setColJumpIdx] = useState(0);
 
   const changedCellsRef = useRef<Set<string>>(new Set());
   const [uncommittedCount, setUncommittedCount] = useState(0);
@@ -261,7 +265,6 @@ function HomeContent({ projectId }: { projectId: number }) {
       field: col,
       headerName: col,
       editable: true,
-      filter: true,
       sortable: true,
       width: widthMap[col] ?? 150,
     }));
@@ -269,11 +272,18 @@ function HomeContent({ projectId }: { projectId: number }) {
       field: "id",
       headerName: "ID",
       editable: false,
-      filter: true,
       sortable: true,
       width: 80,
       pinned: "left",
     } as ColDef);
+
+    // Always place 1_TAG NUMBER immediately after ID, pinned left
+    const tagNumIdx = cols.findIndex((c) => c.field === "1_TAG NUMBER");
+    if (tagNumIdx !== -1) {
+      const [tagNumCol] = cols.splice(tagNumIdx, 1);
+      tagNumCol.pinned = "left";
+      cols.splice(1, 0, tagNumCol);
+    }
 
     const changedSet = new Set<string>();
     for (const r of (auditRes.data as { record_id: number; column_name: string }[] | null) ?? []) {
@@ -478,6 +488,65 @@ function HomeContent({ projectId }: { projectId: number }) {
   const hiddenCount = hiddenFields.size;
   const visibleColumns = columns.map((c) => ({ ...c, hide: hiddenFields.has(c.field as string) }));
 
+  const scrollToColumn = (field: string) => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    const col = api.getColumn(field);
+    if (!col) return;
+
+    // col.getLeft() is the absolute pixel position across ALL columns (including pinned).
+    // The center viewport's scrollLeft is relative to its own start (after pinned cols),
+    // so subtract the total pinned-left width to get the correct offset.
+    const pinnedLeftWidth = api
+      .getAllDisplayedColumns()
+      .filter((c) => c.isPinnedLeft())
+      .reduce((sum, c) => sum + c.getActualWidth(), 0);
+
+    const scrollLeft = Math.max(0, (col.getLeft() ?? 0) - pinnedLeftWidth);
+
+    // Drive scroll through AG Grid's fake horizontal scrollbar so that its
+    // internal sync (center viewport + header) runs normally and pinned
+    // columns stay in place.
+    const hScroll = document.querySelector(
+      ".ag-body-horizontal-scroll-viewport"
+    ) as HTMLElement | null;
+    if (hScroll) {
+      hScroll.scrollLeft = scrollLeft;
+    } else {
+      // Fallback for when the scrollbar element isn't rendered (all cols fit on screen)
+      const center = document.querySelector(".ag-center-cols-viewport") as HTMLElement | null;
+      if (center) center.scrollLeft = scrollLeft;
+    }
+  };
+
+  const handleColJumpChange = (q: string) => {
+    setColJumpQuery(q);
+    if (!q.trim()) { setColJumpMatches([]); setColJumpIdx(0); return; }
+    const lq = q.toLowerCase();
+    const matches = columns
+      .map((c) => c.field as string)
+      .filter((f) => f && f !== "id" && f.toLowerCase().includes(lq));
+    setColJumpMatches(matches);
+    setColJumpIdx(0);
+    if (matches.length > 0) scrollToColumn(matches[0]);
+  };
+
+  const handleColJumpKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (colJumpMatches.length === 0) return;
+    if (e.key === "Enter" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const next = (colJumpIdx + 1) % colJumpMatches.length;
+      setColJumpIdx(next);
+      scrollToColumn(colJumpMatches[next]);
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      const prev = (colJumpIdx - 1 + colJumpMatches.length) % colJumpMatches.length;
+      setColJumpIdx(prev);
+      scrollToColumn(colJumpMatches[prev]);
+    }
+  };
+
   const btnBase =
     "flex items-center gap-2 border px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-white dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-200";
 
@@ -510,6 +579,24 @@ function HomeContent({ projectId }: { projectId: number }) {
             {darkMode ? <Sun size={16} /> : <Moon size={16} />}
             {darkMode ? "Light" : "Dark"}
           </button>
+
+          {/* 컬럼 이름으로 이동 */}
+          <div className="relative flex items-center">
+            <ArrowLeftRight size={14} className="absolute left-3 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={colJumpQuery}
+              onChange={(e) => handleColJumpChange(e.target.value)}
+              onKeyDown={handleColJumpKeyDown}
+              placeholder="컬럼 이동..."
+              className="pl-8 pr-3 py-2 text-sm border border-gray-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 outline-none focus:border-blue-400 w-36"
+            />
+            {colJumpMatches.length > 0 && (
+              <span className="absolute right-2 text-xs text-gray-400 dark:text-slate-500 pointer-events-none">
+                {colJumpIdx + 1}/{colJumpMatches.length}
+              </span>
+            )}
+          </div>
 
           <button
             onClick={() => gridApiRef.current?.setFilterModel(null)}
