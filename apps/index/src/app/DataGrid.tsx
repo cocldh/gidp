@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useMemo } from "react";
 import { AgGridReact } from "ag-grid-react";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-alpine.css";
@@ -9,6 +9,7 @@ import type { ColDef, GridApi, CellFocusedEvent } from "ag-grid-community";
 interface DataGridProps {
   columns: ColDef[];
   rowData: any[];
+  totalRows: number;
   onCellValueChanged: (event: any) => void;
   onGridReady?: (api: GridApi) => void;
   isChangedCell: (recordId: number, colName: string) => boolean;
@@ -38,7 +39,13 @@ function rangeKeys(sel: RangeSel): Set<string> {
 }
 
 
-export default function DataGrid({ columns, rowData, onCellValueChanged, onGridReady, isChangedCell, onUndo }: DataGridProps) {
+export default function DataGrid({ columns, rowData, totalRows, onCellValueChanged, onGridReady, isChangedCell, onUndo }: DataGridProps) {
+  // "All" shows up as the exact row count — AG Grid Community's selector only supports numeric options.
+  const pageSizeOptions = useMemo(() => {
+    const opts: number[] = [100, 500, 1000, 5000];
+    if (totalRows > 5000 && !opts.includes(totalRows)) opts.push(totalRows);
+    return opts;
+  }, [totalRows]);
   const gridApiRef = useRef<GridApi | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
@@ -340,7 +347,8 @@ export default function DataGrid({ columns, rowData, onCellValueChanged, onGridR
         onCellFocused={onCellFocused}
         onCellMouseDown={onCellMouseDown}
         pagination={true}
-        paginationPageSize={30000}
+        paginationPageSize={totalRows > 0 ? totalRows : 1000}
+        paginationPageSizeSelector={pageSizeOptions}
         rowSelection="single"
         suppressRowClickSelection={true}
         animateRows={true}

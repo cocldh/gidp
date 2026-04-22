@@ -81,6 +81,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [columns, setColumns] = useState<ColDef[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [rowData, setRowData] = useState<any[]>([]);
+  const [totalRows, setTotalRows] = useState(0);
   const [loading, setLoading] = useState(false);
 
   const [darkMode, setDarkMode] = useState(false);
@@ -186,47 +187,45 @@ function HomeContent({ projectId }: { projectId: number }) {
     undoStack.current = [];
     setPendingCount(0);
 
-    const { data: colData, error: colError } = await idx
-      .from("index_column")
-      .select("column_name, order_index")
-      .eq("project_id", projectId)
-      .order("order_index");
+    const PAGE = 1000;
 
-    if (colError) {
-      console.error("index_column query failed:", {
-        message: colError.message,
-        code: colError.code,
-        details: colError.details,
-        hint: colError.hint,
-      });
+    // Phase 1: columns + first chunk (with exact count) + audit log, all in parallel
+    const [colRes, firstRes, auditRes] = await Promise.all([
+      idx
+        .from("index_column")
+        .select("column_name, order_index")
+        .eq("project_id", projectId)
+        .order("order_index"),
+      idx
+        .from("index_record")
+        .select("id, data", { count: "exact" })
+        .eq("project_id", projectId)
+        .order("id")
+        .range(0, PAGE - 1),
+      idx
+        .from("index_audit_log")
+        .select("record_id, column_name")
+        .eq("project_id", projectId)
+        .eq("committed", false)
+        .range(0, 9999),
+    ]);
+
+    if (colRes.error) {
+      console.error("index_column query failed:", colRes.error);
+      setLoading(false);
+      return;
+    }
+    if (firstRes.error) {
+      console.error("index_record first-chunk query failed:", firstRes.error);
       setLoading(false);
       return;
     }
 
-    const colNames = ((colData as { column_name: string }[] | null) ?? []).map((c) => c.column_name);
-
-    const PAGE = 1000;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allRows: any[] = [];
-    let from = 0;
-    while (true) {
-      const { data, error } = await idx
-        .from("index_record")
-        .select("id, data")
-        .eq("project_id", projectId)
-        .range(from, from + PAGE - 1)
-        .order("id");
-      if (error?.message) {
-        console.error(error);
-        break;
-      }
-      if (!data || data.length === 0) break;
-      allRows = allRows.concat(
-        (data as { id: number; data: Record<string, unknown> }[]).map((r) => ({ ...r.data, id: r.id })),
-      );
-      if (data.length < PAGE) break;
-      from += PAGE;
-    }
+    const colNames = ((colRes.data as { column_name: string }[] | null) ?? []).map((c) => c.column_name);
+    const firstRows: Record<string, unknown>[] = (
+      (firstRes.data as { id: number; data: Record<string, unknown> }[] | null) ?? []
+    ).map((r) => ({ ...r.data, id: r.id }));
+    const totalCount = firstRes.count ?? firstRows.length;
 
     const CHAR_PX = 8;
     const PADDING = 28;
@@ -240,11 +239,12 @@ function HomeContent({ projectId }: { projectId: number }) {
     if (cached) {
       widthMap = JSON.parse(cached);
     } else {
+      // Sample widths from first chunk only — avoids O(N*M) blocking pass on 27k rows
       const maxLen: Record<string, number> = {};
       colNames.forEach((col) => {
         maxLen[col] = col.length;
       });
-      for (const row of allRows) {
+      for (const row of firstRows) {
         for (const col of colNames) {
           const len = row[col] != null ? String(row[col]).length : 0;
           if (len > (maxLen[col] ?? 0)) maxLen[col] = len;
@@ -274,30 +274,46 @@ function HomeContent({ projectId }: { projectId: number }) {
       width: 80,
       pinned: "left",
     } as ColDef);
-    setColumns(cols);
-    setRowData(allRows);
 
-    // Load uncommitted changed cells from audit log
     const changedSet = new Set<string>();
-    let auditFrom = 0;
-    while (true) {
-      const { data: auditChunk } = await idx
-        .from("index_audit_log")
-        .select("record_id, column_name")
-        .eq("project_id", projectId)
-        .eq("committed", false)
-        .range(auditFrom, auditFrom + 999);
-      if (!auditChunk || auditChunk.length === 0) break;
-      for (const r of auditChunk as { record_id: number; column_name: string }[]) {
-        changedSet.add(`${r.record_id}_${r.column_name}`);
-      }
-      if (auditChunk.length < 1000) break;
-      auditFrom += 1000;
+    for (const r of (auditRes.data as { record_id: number; column_name: string }[] | null) ?? []) {
+      changedSet.add(`${r.record_id}_${r.column_name}`);
     }
     changedCellsRef.current = changedSet;
     setUncommittedCount(changedSet.size);
 
+    setColumns(cols);
+    setRowData(firstRows);
+    setTotalRows(totalCount);
     setLoading(false);
+
+    // Phase 2: keyset-paginated streaming fetch. Each query is a pkey range scan
+    // (`WHERE id > cursor LIMIT PAGE`) — no OFFSET cost, no statement_timeout risk,
+    // and the UI gets incremental progress on every append.
+    if (totalCount > firstRows.length) {
+      let cursor = firstRows.length > 0 ? Math.max(...firstRows.map((r) => r.id as number)) : -1;
+      while (true) {
+        const { data, error } = await idx
+          .from("index_record")
+          .select("id, data")
+          .eq("project_id", projectId)
+          .gt("id", cursor)
+          .order("id")
+          .limit(PAGE);
+        if (error) {
+          console.error("index_record keyset fetch failed:", error);
+          break;
+        }
+        const rows = ((data as { id: number; data: Record<string, unknown> }[] | null) ?? []).map((r) => ({
+          ...r.data,
+          id: r.id,
+        }));
+        if (rows.length === 0) break;
+        setRowData((prev) => [...prev, ...rows]);
+        cursor = rows[rows.length - 1].id as number;
+        if (rows.length < PAGE) break;
+      }
+    }
   }, [idx, projectId]);
 
   useEffect(() => {
@@ -474,8 +490,17 @@ function HomeContent({ projectId }: { projectId: number }) {
             GIDP Master Index
           </h1>
           {!loading && (
-            <span className="text-sm text-gray-400">
-              {rowData.length.toLocaleString()} rows · {allFields.length} columns
+            <span className="text-sm text-gray-400 flex items-center gap-2">
+              {rowData.length < totalRows ? (
+                <>
+                  <Loader2 className="animate-spin text-blue-400" size={12} />
+                  {rowData.length.toLocaleString()} / {totalRows.toLocaleString()} rows · {allFields.length} columns
+                </>
+              ) : (
+                <>
+                  {rowData.length.toLocaleString()} rows · {allFields.length} columns
+                </>
+              )}
             </span>
           )}
         </div>
@@ -695,6 +720,7 @@ function HomeContent({ projectId }: { projectId: number }) {
           <DataGrid
             columns={visibleColumns}
             rowData={rowData}
+            totalRows={totalRows}
             onCellValueChanged={onCellValueChanged}
             onGridReady={(api) => {
               gridApiRef.current = api;
