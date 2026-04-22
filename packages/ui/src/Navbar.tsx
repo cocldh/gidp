@@ -78,12 +78,14 @@ export function Navbar({
   };
 
   return (
-    <nav className="bg-gray-900 text-white px-4 py-3">
+    <nav className="bg-white border-b border-gray-100 shadow-sm px-6 py-3">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <span className="text-lg font-bold">{title}</span>
+        <div className="flex items-center gap-5">
+          <span className="text-lg font-bold text-[#000080]">
+            {title}
+          </span>
           {moduleTabs.length > 0 && (
-            <div className="hidden md:flex items-center gap-1 text-sm">
+            <div className="hidden md:flex items-center gap-1">
               {moduleTabs.map((tab) => {
                 const active = tab.module === currentModule;
                 return (
@@ -91,10 +93,10 @@ export function Navbar({
                     key={tab.module}
                     href={tab.href}
                     className={
-                      'px-3 py-1 rounded ' +
+                      'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ' +
                       (active
-                        ? 'bg-gray-700 text-white'
-                        : 'text-gray-300 hover:bg-gray-800 hover:text-white')
+                        ? 'bg-blue-50 text-blue-600'
+                        : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900')
                     }
                   >
                     {tab.label}
@@ -103,11 +105,15 @@ export function Navbar({
               })}
             </div>
           )}
-          <div className="hidden md:flex items-center gap-4 text-sm">
+          <div className="hidden md:flex items-center gap-1 text-sm">
             {links
               .filter((l) => (l.when ? l.when(gate) : true))
               .map((l) => (
-                <Link key={l.href} href={l.href} className="hover:text-gray-300">
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="px-3 py-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                >
                   {l.label}
                 </Link>
               ))}
@@ -117,7 +123,7 @@ export function Navbar({
           {projectLabel && (
             <Link
               href={projectSwitchHref}
-              className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-blue-800 hover:bg-blue-700 rounded text-xs text-blue-200"
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs text-blue-600 transition-colors"
               title="프로젝트 전환"
             >
               <span>📁</span>
@@ -126,16 +132,16 @@ export function Navbar({
             </Link>
           )}
           {role.email && (
-            <span className="hidden sm:inline text-gray-400">
+            <span className="hidden sm:inline text-gray-400 text-xs">
               {role.email}
-              <span className="ml-2 px-2 py-0.5 rounded text-xs font-medium bg-gray-700">
+              <span className="ml-2 px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600">
                 {role.moduleAccess}
               </span>
             </span>
           )}
           <button
             onClick={handleLogout}
-            className="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
           >
             Logout
           </button>

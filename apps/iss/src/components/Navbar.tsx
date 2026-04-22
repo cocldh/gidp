@@ -2,15 +2,14 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from '@/components/RoleGuard'
 import type { UserProfile } from '@/lib/types'
 
-// Links back to the shell (same public origin). Raw <a> + absolute path
-// bypasses Next's basePath prepending so '/' goes to shell dashboard,
-// not /iss/. window.location.assign has the same behavior.
 export default function Navbar() {
   const supabase = createClient()
+  const pathname = usePathname()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [projectName, setProjectName] = useState<string>('')
   const { globalRole, effectiveAccess, hasRole } = useUserRole()
@@ -54,64 +53,57 @@ export default function Navbar() {
   const canManageForms = hasRole('ProjectAdmin')
   const canViewChangelog = hasRole('Editor')
 
+  const navLink = (href: string, label: string) => {
+    const active = pathname === href || pathname.startsWith(href + '/')
+    return (
+      <Link
+        href={href}
+        className={
+          'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ' +
+          (active
+            ? 'bg-blue-50 text-blue-600'
+            : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900')
+        }
+      >
+        {label}
+      </Link>
+    )
+  }
+
   return (
-    <nav className="bg-gray-900 text-white px-4 py-3">
+    <nav className="bg-white border-b border-gray-100 shadow-sm px-6 py-3">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
           <a
             href="/"
-            className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+            className="text-xs text-gray-400 hover:text-blue-600 transition-colors flex items-center gap-1"
             title="GIDP Dashboard"
           >
             ← GIDP
           </a>
-          <Link href="/dashboard" className="text-lg font-bold">
+          <Link
+            href="/dashboard"
+            className="text-lg font-bold text-[#000080]"
+          >
             ISS
           </Link>
-          <div className="hidden md:flex items-center gap-4 text-sm">
-            <Link href="/dashboard" className="hover:text-gray-300">
-              Form View
-            </Link>
-            <Link href="/browser" className="hover:text-gray-300">
-              Browser View
-            </Link>
-            {canViewChangelog && (
-              <Link href="/changelog" className="hover:text-gray-300">
-                Change Log
-              </Link>
-            )}
-            {canManageForms && (
-              <>
-                <Link href="/forms" className="hover:text-gray-300">
-                  Form Management
-                </Link>
-                <Link href="/admin/merge" className="hover:text-gray-300">
-                  Field Management
-                </Link>
-              </>
-            )}
-            {isGlobalAdmin && (
-              <Link href="/admin/users" className="hover:text-gray-300">
-                User Management
-              </Link>
-            )}
-            {isGlobalAdmin && (
-              <Link href="/admin/fields" className="hover:text-gray-300">
-                Default Fields
-              </Link>
-            )}
-            {isGlobalAdmin && (
-              <Link href="/admin/projects" className="hover:text-gray-300">
-                Projects
-              </Link>
-            )}
+          <div className="hidden md:flex items-center gap-1">
+            {navLink('/dashboard', 'Form View')}
+            {navLink('/browser', 'Browser View')}
+            {canViewChangelog && navLink('/changelog', 'Change Log')}
+            {canManageForms && navLink('/forms', 'Form Management')}
+            {canManageForms && navLink('/admin/merge', 'Field Management')}
+            {isGlobalAdmin && navLink('/admin/users', 'User Management')}
+            {isGlobalAdmin && navLink('/admin/fields', 'Default Fields')}
+            {isGlobalAdmin && navLink('/admin/projects', 'Projects')}
           </div>
         </div>
+
         <div className="flex items-center gap-3 text-sm">
           {projectName && (
             <a
               href="/project"
-              className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-blue-800 hover:bg-blue-700 rounded text-xs text-blue-200"
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs text-blue-600 transition-colors"
               title="프로젝트 전환"
             >
               <span>📁</span>
@@ -120,16 +112,16 @@ export default function Navbar() {
             </a>
           )}
           {profile && (
-            <span className="hidden sm:inline text-gray-400">
+            <span className="hidden sm:inline text-gray-400 text-xs">
               {profile.email}
-              <span className="ml-2 px-2 py-0.5 rounded text-xs font-medium bg-gray-700">
+              <span className="ml-2 px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600">
                 {effectiveAccess}
               </span>
             </span>
           )}
           <button
             onClick={handleLogout}
-            className="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
           >
             Logout
           </button>

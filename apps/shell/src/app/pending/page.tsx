@@ -27,8 +27,8 @@ export default function PendingPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md text-center">
+    <div className="min-h-screen flex items-center justify-center bg-[#f7f4ef]">
+      <div className="w-full max-w-md p-8 bg-white rounded-xl shadow-sm border border-gray-100 text-center">
         <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <svg className="w-8 h-8 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -45,13 +45,13 @@ export default function PendingPage() {
         <div className="space-y-3">
           <button
             onClick={handleCheck}
-            className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
+            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
           >
             Check Approval Status
           </button>
           <button
             onClick={handleSignOut}
-            className="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm"
+            className="w-full px-4 py-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 text-sm transition-colors"
           >
             Sign Out
           </button>

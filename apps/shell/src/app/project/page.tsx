@@ -48,9 +48,9 @@ export default async function ProjectPage({ searchParams }: ProjectPageProps) {
   const { return_to } = await searchParams
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4">
+    <div className="min-h-screen bg-[#f7f4ef] flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-2xl">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2 text-center">프로젝트 선택</h1>
+        <h1 className="text-3xl font-bold mb-2 text-center text-[#000080]">프로젝트 선택</h1>
         <p className="text-gray-500 text-center mb-8">
           작업할 프로젝트를 선택하세요.
           {profile.display_name && (

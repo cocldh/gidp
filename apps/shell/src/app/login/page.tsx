@@ -191,9 +191,9 @@ function LoginInner() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-center mb-1">GIDP</h1>
+    <div className="min-h-screen flex items-center justify-center bg-[#f7f4ef]">
+      <div className="w-full max-w-md p-8 bg-white rounded-xl shadow-sm border border-gray-100">
+        <h1 className="text-2xl font-bold text-center mb-1 text-[#000080]">GIDP</h1>
         <p className="text-gray-500 text-center text-sm mb-6">
           GS Instrument Data Platform
         </p>
@@ -336,7 +336,7 @@ function LoginInner() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-50" />}>
+    <Suspense fallback={<div className="min-h-screen bg-[#f7f4ef]" />}>
       <LoginInner />
     </Suspense>
   )

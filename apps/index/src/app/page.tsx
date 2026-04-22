@@ -555,7 +555,7 @@ function HomeContent({ projectId }: { projectId: number }) {
       {/* Header */}
       <div className="flex items-center justify-between mb-6 bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+          <h1 className="text-2xl font-bold text-[#000080]">
             GIDP Master Index
           </h1>
           {!loading && (

@@ -95,13 +95,15 @@ export default async function DashboardPage() {
   const displayName = profile.display_name || profile.username || user.email
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200">
+    <div className="min-h-screen bg-[#f7f4ef]">
+      <header className="bg-white border-b border-gray-100 shadow-sm">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <div className="text-xs uppercase tracking-wider text-gray-400">GIDP</div>
-            <div className="text-lg font-semibold text-gray-900">
-              {project.project_name}
+            <div className="text-lg font-semibold">
+              <span className="text-[#000080] font-bold">
+                {project.project_name}
+              </span>
               <span className="ml-2 text-sm font-mono text-gray-400">{project.project_code}</span>
             </div>
           </div>
@@ -116,14 +118,14 @@ export default async function DashboardPage() {
             </span>
             <Link
               href="/project"
-              className="px-3 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-100"
+              className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
             >
               프로젝트 변경
             </Link>
             {profile.role === 'Admin' && (
               <a
                 href="/iss/admin"
-                className="px-3 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-100"
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
               >
                 Admin
               </a>
@@ -135,7 +137,7 @@ export default async function DashboardPage() {
 
       <main className="max-w-6xl mx-auto px-6 py-10">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">도구 선택</h1>
+          <h1 className="text-2xl font-bold mb-1 text-[#000080]">도구 선택</h1>
           <p className="text-gray-500 text-sm">
             이 프로젝트에서 사용할 GIDP 도구를 선택하세요.
           </p>
