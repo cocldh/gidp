@@ -31,6 +31,12 @@ Thumbs.db
 !.vscode/settings.json
 .idea/
 
+# Claude Code
+.claude/
+
+# Sample / reference files
+*.pdf
+
 # Vercel
 .vercel
 
