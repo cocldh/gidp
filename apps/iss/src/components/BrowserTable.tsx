@@ -41,12 +41,15 @@ export default function BrowserTable() {
   const [rowData, setRowData] = useState<Record<string, unknown>[]>([])
   const [columnDefs, setColumnDefs] = useState<ColDef[]>([])
   const [totalHint, setTotalHint] = useState('')
+  const [totalCount, setTotalCount] = useState(0)
+  const [isStreaming, setIsStreaming] = useState(false)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(100)
   const PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
 
   const pendingEdits = useRef<Map<EditKey, string | null>>(new Map())
   const [pendingCount, setPendingCount] = useState(0)
+  const loadIdRef = useRef(0)
 
   const changedSetRef = useRef<Set<string>>(new Set())
 
@@ -74,11 +77,96 @@ export default function BrowserTable() {
     if (data) setTemplates(data as Template[])
   }
 
+  const buildFixedCols = (): ColDef[] => [
+    {
+      field: '_select',
+      headerName: '',
+      width: 40, minWidth: 40, maxWidth: 40,
+      pinned: 'left' as const,
+      editable: false, sortable: false, filter: false, resizable: false,
+      cellRenderer: (params: any) => {
+        const docId = params.data?._doc_id
+        if (!docId) return null
+        return (
+          <input
+            type="checkbox"
+            checked={selectedDocIds.has(docId)}
+            onChange={() => toggleDoc(docId)}
+            className="accent-indigo-600"
+            onClick={e => e.stopPropagation()}
+          />
+        )
+      },
+      headerComponent: () => (
+        <input type="checkbox" className="accent-indigo-600" onChange={toggleAllDocs} onClick={e => e.stopPropagation()} />
+      ),
+    },
+    { field: 'tag_number', headerName: 'Tag Number', pinned: 'left' as const, editable: false, width: 140, minWidth: 100 },
+    { field: 'document_number', headerName: 'Document', pinned: 'left' as const, editable: false, width: 160, minWidth: 120 },
+    { field: 'template_code', headerName: 'Template', editable: false, width: 120, minWidth: 80 },
+    { field: 'sheet_number', headerName: 'Sheet', editable: false, width: 70, minWidth: 60 },
+    { field: 'revision', headerName: 'Rev', editable: false, width: 70, minWidth: 50 },
+  ]
+
+  const flattenRows = (rows: BrowserRow[]) => rows.map(row => ({
+    _doc_id: row.document_id,
+    _tag_id: row.tag_id,
+    tag_number: row.tag_number,
+    document_number: row.document_number,
+    template_code: row.template_code,
+    sheet_number: row.sheet_number ?? '',
+    revision: (row.revision_number ?? '') + (row.minor_revision ?? ''),
+    ...row.field_values,
+  }))
+
+  const fetchChangedCells = async (docIds: number[], fieldCols: FieldColumn[]) => {
+    if (docIds.length === 0) return new Set<string>()
+    const { data } = await iss
+      .from('document_value_change')
+      .select('document_id, field_id')
+      .in('document_id', docIds)
+    const fieldIdToName = new Map(fieldCols.map(c => [c.field_id, c.field_name]))
+    return new Set(
+      ((data ?? []) as Array<{ document_id: number; field_id: number }>)
+        .map(d => makeKey(d.document_id, fieldIdToName.get(d.field_id) ?? String(d.field_id)))
+    )
+  }
+
+  const buildDynCols = (fieldCols: FieldColumn[], customOrder: string[]): ColDef[] => {
+    const orderMap = new Map(customOrder.map((name, idx) => [name, idx]))
+    const enriched = [...fieldCols]
+    enriched.sort((a, b) => {
+      const g = (c: FieldColumn) => c.data_kind === 'default' ? 0 : c.field_name.toLowerCase().includes('note') ? 2 : 1
+      const ga = g(a), gb = g(b)
+      if (ga !== gb) return ga - gb
+      if (ga === 1 && orderMap.size > 0) {
+        const ia = orderMap.has(a.field_name) ? orderMap.get(a.field_name)! : 9999
+        const ib = orderMap.has(b.field_name) ? orderMap.get(b.field_name)! : 9999
+        return ia - ib
+      }
+      return 0
+    })
+    return enriched.map(col => ({
+      field: col.field_name,
+      headerName: col.field_name,
+      editable: canEdit,
+      width: 150, minWidth: 80,
+      cellEditor: col.field_name.toLowerCase().includes('note') ? 'agLargeTextCellEditor' : 'agTextCellEditor',
+      cellEditorPopup: col.field_name.toLowerCase().includes('note'),
+    }))
+  }
+
+  const STREAM_CHUNK = 1000
+
   const loadData = useCallback(async (p = 0) => {
     if (projectId == null) return
     if (browserMode === 'form' && !selectedTemplate) return
+
+    const loadId = ++loadIdRef.current
     setLoading(true)
     setPage(p)
+    setIsStreaming(false)
+    setTotalCount(0)
     pendingEdits.current.clear()
     setPendingCount(0)
 
@@ -86,32 +174,23 @@ export default function BrowserTable() {
       ? templates.find(t => t.template_id === selectedTemplate)?.template_code ?? null
       : null
 
-    const [{ data: colData }, { data: rowDataRaw }] = await Promise.all([
+    // ── 컬럼 정의 로드 ─────────────────────────────────────────────────────
+    const [colRes, customOrderRes] = await Promise.all([
       supabase.rpc('iss_get_field_columns', {
         p_project_id: projectId,
         p_template_id: selectedTemplate,
       }),
-      supabase.rpc('iss_get_browser_data', {
-        p_project_id: projectId,
-        p_template_id: selectedTemplate,
-        p_search: search.trim() || null,
-        p_limit: pageSize + 1,
-        p_offset: p * pageSize,
-      }),
+      templateCode
+        ? fetch(`/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`)
+            .then(r => r.json()).then(j => j.order ?? []).catch(() => [] as string[])
+        : Promise.resolve([] as string[]),
     ])
 
-    let customOrder: string[] = []
-    if (templateCode) {
-      try {
-        const res = await fetch(`/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`)
-        const json = await res.json()
-        customOrder = json.order ?? []
-      } catch {}
-    }
+    if (loadId !== loadIdRef.current) return
 
     let fieldCols: FieldColumn[] = []
-    if (colData) {
-      const typedCols = colData as FieldColumn[]
+    if (colRes.data) {
+      const typedCols = colRes.data as FieldColumn[]
       const fieldIds = typedCols.map(c => c.field_id)
       const { data: kindData } = await iss
         .from('field_def')
@@ -121,21 +200,78 @@ export default function BrowserTable() {
       for (const k of (kindData ?? []) as Array<{ field_id: number; data_kind: string | null }>) {
         kindMap[k.field_id] = k.data_kind ?? ''
       }
-      const enriched = typedCols.map(c => ({ ...c, data_kind: kindMap[c.field_id] ?? '' }))
-      const orderMap = new Map(customOrder.map((name, idx) => [name, idx]))
-      enriched.sort((a, b) => {
-        const g = (c: FieldColumn) => c.data_kind === 'default' ? 0 : c.field_name.toLowerCase().includes('note') ? 2 : 1
-        const ga = g(a), gb = g(b)
-        if (ga !== gb) return ga - gb
-        if (ga === 1 && orderMap.size > 0) {
-          const ia = orderMap.has(a.field_name) ? orderMap.get(a.field_name)! : 9999
-          const ib = orderMap.has(b.field_name) ? orderMap.get(b.field_name)! : 9999
-          return ia - ib
-        }
-        return 0
-      })
-      fieldCols = enriched
+      fieldCols = typedCols.map(c => ({ ...c, data_kind: kindMap[c.field_id] ?? '' }))
     }
+
+    if (loadId !== loadIdRef.current) return
+
+    // ── Total Browser: 첫 1000행 즉시 표시 후 백그라운드 스트리밍 ──────────
+    if (browserMode === 'total') {
+      const { data: firstData } = await supabase.rpc('iss_get_browser_data', {
+        p_project_id: projectId,
+        p_template_id: null,
+        p_search: search.trim() || null,
+        p_limit: STREAM_CHUNK,
+        p_offset: 0,
+      })
+
+      if (loadId !== loadIdRef.current) return
+
+      const firstRows = flattenRows((firstData ?? []) as BrowserRow[])
+      const changedFirst = await fetchChangedCells(firstRows.map(r => r._doc_id as number), fieldCols)
+      if (loadId !== loadIdRef.current) return
+
+      changedSetRef.current = changedFirst
+      setColumnDefs([...buildFixedCols(), ...buildDynCols(fieldCols, customOrderRes)])
+      setRowData(firstRows)
+      setTotalHint(String(firstRows.length))
+      setHasSearched(true)
+      setLoading(false)
+      setSelectedDocIds(new Set())
+
+      // Phase 2: 백그라운드 스트리밍
+      if (firstRows.length === STREAM_CHUNK) {
+        setIsStreaming(true)
+        let offset = STREAM_CHUNK
+        while (true) {
+          const { data: chunk } = await supabase.rpc('iss_get_browser_data', {
+            p_project_id: projectId,
+            p_template_id: null,
+            p_search: search.trim() || null,
+            p_limit: STREAM_CHUNK,
+            p_offset: offset,
+          })
+          if (loadId !== loadIdRef.current) return
+
+          const moreRows = (chunk ?? []) as BrowserRow[]
+          if (moreRows.length === 0) break
+
+          const flat = flattenRows(moreRows)
+          const changedChunk = await fetchChangedCells(flat.map(r => r._doc_id as number), fieldCols)
+          if (loadId !== loadIdRef.current) return
+
+          for (const k of changedChunk) changedSetRef.current.add(k)
+          gridApiRef.current?.applyTransaction({ add: flat })
+          setTotalHint(prev => String(parseInt(prev) + flat.length))
+
+          offset += STREAM_CHUNK
+          if (moreRows.length < STREAM_CHUNK) break
+        }
+        setIsStreaming(false)
+      }
+      return
+    }
+
+    // ── Form Browser: 기존 페이지네이션 방식 ─────────────────────────────
+    const { data: rowDataRaw } = await supabase.rpc('iss_get_browser_data', {
+      p_project_id: projectId,
+      p_template_id: selectedTemplate,
+      p_search: search.trim() || null,
+      p_limit: pageSize + 1,
+      p_offset: p * pageSize,
+    })
+
+    if (loadId !== loadIdRef.current) return
 
     if (rowDataRaw) {
       const typed = rowDataRaw as BrowserRow[]
@@ -143,74 +279,12 @@ export default function BrowserTable() {
       const displayRows = hasMore ? typed.slice(0, pageSize) : typed
       setTotalHint(hasMore ? `${pageSize}+` : `${typed.length}`)
 
-      const docIds = displayRows.map(r => r.document_id)
-      if (docIds.length > 0) {
-        const { data: changedData } = await iss
-          .from('document_value_change')
-          .select('document_id, field_id')
-          .in('document_id', docIds)
-        const fieldIdToName = new Map(fieldCols.map(c => [c.field_id, c.field_name]))
-        changedSetRef.current = new Set(
-          ((changedData ?? []) as Array<{ document_id: number; field_id: number }>)
-            .map(d => makeKey(d.document_id, fieldIdToName.get(d.field_id) ?? String(d.field_id)))
-        )
-      } else {
-        changedSetRef.current = new Set()
-      }
+      const changedCells = await fetchChangedCells(displayRows.map(r => r.document_id), fieldCols)
+      if (loadId !== loadIdRef.current) return
+      changedSetRef.current = changedCells
 
-      const flatRows = displayRows.map(row => ({
-        _doc_id: row.document_id,
-        _tag_id: row.tag_id,
-        tag_number: row.tag_number,
-        document_number: row.document_number,
-        template_code: row.template_code,
-        sheet_number: row.sheet_number ?? '',
-        revision: (row.revision_number ?? '') + (row.minor_revision ?? ''),
-        ...row.field_values,
-      }))
-
-      const fixedCols: ColDef[] = [
-        {
-          field: '_select',
-          headerName: '',
-          width: 40, minWidth: 40, maxWidth: 40,
-          pinned: 'left' as const,
-          editable: false, sortable: false, filter: false, resizable: false,
-          cellRenderer: (params: any) => {
-            const docId = params.data?._doc_id
-            if (!docId) return null
-            return (
-              <input
-                type="checkbox"
-                checked={selectedDocIds.has(docId)}
-                onChange={() => toggleDoc(docId)}
-                className="accent-indigo-600"
-                onClick={e => e.stopPropagation()}
-              />
-            )
-          },
-          headerComponent: () => (
-            <input type="checkbox" className="accent-indigo-600" onChange={toggleAllDocs} onClick={e => e.stopPropagation()} />
-          ),
-        },
-        { field: 'tag_number', headerName: 'Tag Number', pinned: 'left' as const, editable: false, width: 140, minWidth: 100 },
-        { field: 'document_number', headerName: 'Document', pinned: 'left' as const, editable: false, width: 160, minWidth: 120 },
-        { field: 'template_code', headerName: 'Template', editable: false, width: 120, minWidth: 80 },
-        { field: 'sheet_number', headerName: 'Sheet', editable: false, width: 70, minWidth: 60 },
-        { field: 'revision', headerName: 'Rev', editable: false, width: 70, minWidth: 50 },
-      ]
-
-      const dynCols: ColDef[] = fieldCols.map(col => ({
-        field: col.field_name,
-        headerName: col.field_name,
-        editable: canEdit,
-        width: 150, minWidth: 80,
-        cellEditor: col.field_name.toLowerCase().includes('note') ? 'agLargeTextCellEditor' : 'agTextCellEditor',
-        cellEditorPopup: col.field_name.toLowerCase().includes('note'),
-      }))
-
-      setRowData(flatRows)
-      setColumnDefs([...fixedCols, ...dynCols])
+      setRowData(flattenRows(displayRows))
+      setColumnDefs([...buildFixedCols(), ...buildDynCols(fieldCols, customOrderRes)])
     } else {
       setRowData([])
       setTotalHint('0')
@@ -393,7 +467,7 @@ export default function BrowserTable() {
         <select
           value={selectedTemplate ?? ''}
           onChange={e => handleTemplateChange(e.target.value)}
-          className={`px-3 py-2 border rounded text-sm ${browserMode === 'form' && !selectedTemplate ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}
+          className={`px-3 py-2 border rounded text-sm ${browserMode === 'form' && !selectedTemplate ? 'border-red-300 bg-red-50' : 'border-gray-300 bg-white'}`}
         >
           <option value="">{browserMode === 'form' ? '— Select Template —' : 'All Templates'}</option>
           {templates.map(t => (
@@ -412,13 +486,15 @@ export default function BrowserTable() {
           className="px-3 py-2 border border-gray-300 rounded text-sm flex-1 min-w-48 bg-white"
         />
 
-        <select
-          value={pageSize}
-          onChange={e => { setPageSize(parseInt(e.target.value)); setHasSearched(false) }}
-          className="px-3 py-2 border border-gray-300 rounded text-sm"
-        >
-          {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} rows</option>)}
-        </select>
+        {browserMode === 'form' && (
+          <select
+            value={pageSize}
+            onChange={e => { setPageSize(parseInt(e.target.value)); setHasSearched(false) }}
+            className="px-3 py-2 border border-gray-300 rounded text-sm bg-white"
+          >
+            {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} rows</option>)}
+          </select>
+        )}
 
         <button
           onClick={() => loadData(0)}
@@ -471,19 +547,37 @@ export default function BrowserTable() {
         )}
       </div>
 
-      {/* 페이지 상태 */}
+      {/* 행 수 / 스트리밍 상태 */}
       {hasSearched && (
         <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-          <span>
-            Page {page + 1} · {rowData.length} rows
-            {totalHint.endsWith('+') && ' (more available)'}
-          </span>
-          <div className="flex gap-2">
-            <button onClick={() => loadData(page - 1)} disabled={page === 0 || loading}
-              className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-30">Prev</button>
-            <button onClick={() => loadData(page + 1)} disabled={!totalHint.endsWith('+') || loading}
-              className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-30">Next</button>
-          </div>
+          {browserMode === 'total' ? (
+            <span className="flex items-center gap-2">
+              {isStreaming ? (
+                <>
+                  <svg className="animate-spin w-3 h-3 text-blue-400" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  {parseInt(totalHint).toLocaleString()} rows (loading…)
+                </>
+              ) : (
+                <>{parseInt(totalHint).toLocaleString()} rows</>
+              )}
+            </span>
+          ) : (
+            <>
+              <span>
+                Page {page + 1} · {rowData.length} rows
+                {totalHint.endsWith('+') && ' (more available)'}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => loadData(page - 1)} disabled={page === 0 || loading}
+                  className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-30">Prev</button>
+                <button onClick={() => loadData(page + 1)} disabled={!totalHint.endsWith('+') || loading}
+                  className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-30">Next</button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

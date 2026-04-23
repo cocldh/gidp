@@ -44,8 +44,8 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
   // "All" shows up as the exact row count — AG Grid Community's selector only supports numeric options.
   const pageSizeOptions = useMemo(() => {
     const opts: number[] = [100, 500, 1000, 5000];
-    if (totalRows > 5000 && !opts.includes(totalRows)) opts.push(totalRows);
-    return opts;
+    if (totalRows > 0 && !opts.includes(totalRows)) opts.push(totalRows);
+    return opts.sort((a, b) => a - b);
   }, [totalRows]);
   const gridApiRef = useRef<GridApi | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -361,8 +361,10 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
           sortable: true,
           filter: ExcelStyleFilter,
           cellStyle: (params) => {
+            const api = gridApiRef.current;
+            if (!api || api.isDestroyed()) return { backgroundColor: "" };
             const rowIdx = params.node.rowIndex ?? -1;
-            const allCols = gridApiRef.current?.getAllDisplayedColumns() ?? [];
+            const allCols = api.getAllDisplayedColumns() ?? [];
             const colIdx = allCols.findIndex((c) => c.getColId() === params.column.getColId());
             if (selectedCellsRef.current.has(cellKey(rowIdx, colIdx))) {
               return { backgroundColor: "#bfdbfe" };

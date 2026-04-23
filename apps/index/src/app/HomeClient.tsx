@@ -50,7 +50,9 @@ function HomeContent({ projectId }: { projectId: number }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [rowData, setRowData] = useState<any[]>([]);
   const [totalRows, setTotalRows] = useState(0);
+  const [displayRowCount, setDisplayRowCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const [darkMode, setDarkMode] = useState(false);
   const gridApiRef = useRef<GridApi | null>(null);
@@ -173,7 +175,10 @@ function HomeContent({ projectId }: { projectId: number }) {
 
     const PAGE = 1000;
 
-    // Phase 1: columns + first chunk (with exact count) + audit log, all in parallel
+    // Phase 1: columns + first chunk + audit log, all in parallel.
+    // count: "exact" removed — triggers a full-table scan on PostgREST and can
+    // return an empty error object on large tables. Streaming condition uses
+    // firstRows.length === PAGE instead.
     const [colRes, firstRes, auditRes] = await Promise.all([
       idx
         .from("index_column")
@@ -182,7 +187,7 @@ function HomeContent({ projectId }: { projectId: number }) {
         .order("order_index"),
       idx
         .from("index_record")
-        .select("id, data", { count: "exact" })
+        .select("id, data")
         .eq("project_id", projectId)
         .order("id")
         .range(0, PAGE - 1),
@@ -209,7 +214,6 @@ function HomeContent({ projectId }: { projectId: number }) {
     const firstRows: Record<string, unknown>[] = (
       (firstRes.data as { id: number; data: Record<string, unknown> }[] | null) ?? []
     ).map((r) => ({ ...r.data, id: r.id }));
-    const totalCount = firstRes.count ?? firstRows.length;
 
     const CHAR_PX = 8;
     const PADDING = 28;
@@ -274,14 +278,18 @@ function HomeContent({ projectId }: { projectId: number }) {
 
     setColumns(cols);
     setRowData(firstRows);
-    setTotalRows(totalCount);
+    setTotalRows(firstRows.length);
+    setDisplayRowCount(firstRows.length);
     setLoading(false);
 
     // Phase 2: keyset-paginated streaming fetch. Each query is a pkey range scan
     // (`WHERE id > cursor LIMIT PAGE`) — no OFFSET cost, no statement_timeout risk,
     // and the UI gets incremental progress on every append.
-    if (totalCount > firstRows.length) {
+    // applyTransaction instead of setRowData to avoid scroll reset on each chunk.
+    if (firstRows.length >= PAGE) {
+      setIsStreaming(true);
       let cursor = firstRows.length > 0 ? Math.max(...firstRows.map((r) => r.id as number)) : -1;
+      let finalCount = firstRows.length;
       while (true) {
         const { data, error } = await idx
           .from("index_record")
@@ -291,7 +299,12 @@ function HomeContent({ projectId }: { projectId: number }) {
           .order("id")
           .limit(PAGE);
         if (error) {
-          console.error("index_record keyset fetch failed:", error);
+          console.error(
+            "index_record keyset fetch failed — code:", (error as any).code,
+            "message:", (error as any).message,
+            "details:", (error as any).details,
+            "raw:", error,
+          );
           break;
         }
         const rows = ((data as { id: number; data: Record<string, unknown> }[] | null) ?? []).map((r) => ({
@@ -299,10 +312,17 @@ function HomeContent({ projectId }: { projectId: number }) {
           id: r.id,
         }));
         if (rows.length === 0) break;
-        setRowData((prev) => [...prev, ...rows]);
+        gridApiRef.current?.applyTransaction({ add: rows });
+        finalCount += rows.length;
+        setDisplayRowCount(finalCount);
         cursor = rows[rows.length - 1].id as number;
         if (rows.length < PAGE) break;
       }
+      // totalRows를 한 번만 업데이트 — 스트리밍 중 청크마다 업데이트하면
+      // paginationPageSize와 paginationPageSizeSelector가 서로 다른 값을 보는
+      // AG Grid 경고가 매 청크마다 발생함
+      setTotalRows(finalCount);
+      setIsStreaming(false);
     }
   }, [idx, projectId]);
 
@@ -540,14 +560,14 @@ function HomeContent({ projectId }: { projectId: number }) {
           </h1>
           {!loading && (
             <span className="text-sm text-gray-400 flex items-center gap-2">
-              {rowData.length < totalRows ? (
+              {isStreaming ? (
                 <>
                   <Loader2 className="animate-spin text-blue-400" size={12} />
-                  {rowData.length.toLocaleString()} / {totalRows.toLocaleString()} rows · {allFields.length} columns
+                  {displayRowCount.toLocaleString()} rows (loading…) · {allFields.length} columns
                 </>
               ) : (
                 <>
-                  {rowData.length.toLocaleString()} rows · {allFields.length} columns
+                  {displayRowCount.toLocaleString()} rows · {allFields.length} columns
                 </>
               )}
             </span>
