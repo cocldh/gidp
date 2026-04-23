@@ -603,7 +603,8 @@ export default function BrowserTable() {
         <div className="relative" ref={exportRef}>
           <button
             onClick={() => setExportOpen(v => !v)}
-            disabled={!showGrid}
+            disabled={!showGrid || isStreaming}
+            title={isStreaming ? '데이터 로딩 중 — 완료 후 내보내기 가능' : undefined}
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-sm flex items-center gap-1"
           >
             Export

@@ -53,6 +53,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [displayRowCount, setDisplayRowCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const loadIdRef = useRef(0);
 
   const [darkMode, setDarkMode] = useState(false);
   const gridApiRef = useRef<GridApi | null>(null);
@@ -167,6 +168,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   }, [showColumnPanel]);
 
   const loadData = useCallback(async () => {
+    const myLoadId = ++loadIdRef.current;
     setLoading(true);
     setHiddenFields(new Set());
     pendingChanges.current.clear();
@@ -291,6 +293,7 @@ function HomeContent({ projectId }: { projectId: number }) {
       let cursor = firstRows.length > 0 ? Math.max(...firstRows.map((r) => r.id as number)) : -1;
       let finalCount = firstRows.length;
       while (true) {
+        if (myLoadId !== loadIdRef.current) return;
         const { data, error } = await idx
           .from("index_record")
           .select("id, data")
@@ -298,6 +301,7 @@ function HomeContent({ projectId }: { projectId: number }) {
           .gt("id", cursor)
           .order("id")
           .limit(PAGE);
+        if (myLoadId !== loadIdRef.current) return;
         if (error) {
           console.error(
             "index_record keyset fetch failed — code:", (error as any).code,
@@ -312,12 +316,14 @@ function HomeContent({ projectId }: { projectId: number }) {
           id: r.id,
         }));
         if (rows.length === 0) break;
-        gridApiRef.current?.applyTransaction({ add: rows });
+        if (!gridApiRef.current || gridApiRef.current.isDestroyed()) return;
+        gridApiRef.current.applyTransaction({ add: rows });
         finalCount += rows.length;
         setDisplayRowCount(finalCount);
         cursor = rows[rows.length - 1].id as number;
         if (rows.length < PAGE) break;
       }
+      if (myLoadId !== loadIdRef.current) return;
       // totalRows를 한 번만 업데이트 — 스트리밍 중 청크마다 업데이트하면
       // paginationPageSize와 paginationPageSizeSelector가 서로 다른 값을 보는
       // AG Grid 경고가 매 청크마다 발생함
@@ -447,46 +453,18 @@ function HomeContent({ projectId }: { projectId: number }) {
     gridApiRef.current?.refreshCells({ force: true });
   };
 
-  const exportExcel = async () => {
-    const { data, error } = await idx
-      .from("index_record")
-      .select("data")
-      .eq("project_id", projectId)
-      .order("id");
-    if (error || !data) return;
+  const exportExcel = () => {
+    const api = gridApiRef.current;
+    if (!api) return;
 
-    const colNames = columns.filter((c) => c.field !== "id").map((c) => c.field as string);
-    const rows = (data as { data: Record<string, unknown> }[]).map((r) =>
-      colNames.map((col) => (r.data[col] == null ? "" : String(r.data[col])))
-    );
+    const columnKeys = columns
+      .filter((c) => c.field && c.field !== "id")
+      .map((c) => c.field as string);
 
-    const ExcelJS = (await import("exceljs")).default;
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Master Index");
-
-    ws.addRow(colNames);
-    ws.getRow(1).height = 30;
-    ws.getRow(1).eachCell((cell) => {
-      cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F6B8E" } };
-      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    api.exportDataAsCsv({
+      fileName: "Master_Index_export.csv",
+      columnKeys,
     });
-
-    const maxLen = colNames.map((h) => h.length);
-    rows.forEach((rowVals) => {
-      const row = ws.addRow(rowVals);
-      row.eachCell((cell) => { cell.font = { name: "Calibri", size: 11 }; });
-      rowVals.forEach((v, i) => { if (v.length > maxLen[i]) maxLen[i] = v.length; });
-    });
-
-    colNames.forEach((_, i) => { ws.getColumn(i + 1).width = Math.min(maxLen[i] + 2, 50); });
-
-    const buf = await wb.xlsx.writeBuffer();
-    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "Master_Index_export.xlsx"; a.click();
-    URL.revokeObjectURL(url);
   };
 
   const handleSignOut = async () => {
@@ -784,10 +762,12 @@ function HomeContent({ projectId }: { projectId: number }) {
 
           <button
             onClick={exportExcel}
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            disabled={isStreaming || rowData.length === 0}
+            title={isStreaming ? "데이터 로딩 중 — 완료 후 내보내기 가능" : undefined}
+            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
           >
             <Download size={16} />
-            Export to Excel
+            Export to CSV
           </button>
 
           {userEmail && (
