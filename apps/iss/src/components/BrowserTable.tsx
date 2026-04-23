@@ -356,6 +356,7 @@ export default function BrowserTable() {
           onChange={e => setSearch(e.target.value)}
           onKeyDown={handleKeyDown}
           className="px-3 py-2 border border-gray-300 rounded text-sm flex-1 min-w-48"
+          style={{ backgroundColor: '#ffffff' }}
         />
         <select
           value={pageSize}

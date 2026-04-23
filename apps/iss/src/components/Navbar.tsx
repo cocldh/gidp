@@ -3,6 +3,11 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
+import {
+  Home, FolderKanban, LogOut,
+  ClipboardList, Search, History,
+  Settings, ArrowLeftRight, Users, LayoutTemplate, Folders,
+} from 'lucide-react'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from '@/components/RoleGuard'
 import type { UserProfile } from '@/lib/types'
@@ -53,64 +58,49 @@ export default function Navbar() {
   const canManageForms = hasRole('ProjectAdmin')
   const canViewChangelog = hasRole('Editor')
 
-  const navLink = (href: string, label: string) => {
+  const btnBase =
+    'flex items-center gap-2 border px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-white border-gray-200 text-gray-700'
+
+  const navLink = (href: string, Icon: React.ElementType, label: string) => {
     const active = pathname === href || pathname.startsWith(href + '/')
     return (
       <Link
         href={href}
         className={
-          'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ' +
+          'flex items-center gap-2 border px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ' +
           (active
-            ? 'bg-blue-50 text-blue-600'
-            : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900')
+            ? 'bg-blue-50 text-blue-600 border-blue-200'
+            : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-600')
         }
       >
+        <Icon size={15} />
         {label}
       </Link>
     )
   }
 
   return (
-    <nav className="bg-white border-b border-gray-100 shadow-sm px-6 py-3">
-      <div className="max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-5">
-          <a
-            href="/"
-            className="text-xs text-gray-400 hover:text-blue-600 transition-colors flex items-center gap-1"
-            title="GIDP Dashboard"
-          >
-            ← GIDP
-          </a>
-          <Link
-            href="/dashboard"
-            className="text-lg font-bold text-[#000080]"
-          >
-            ISS
+    <nav className="px-6 pt-6 pb-2">
+      <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        {/* Left: title + nav links */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <Link href="/dashboard" className="text-2xl font-bold text-[#000080] mr-1">
+            GIDP ISS
           </Link>
-          <div className="hidden md:flex items-center gap-1">
-            {navLink('/dashboard', 'Form View')}
-            {navLink('/browser', 'Browser View')}
-            {canViewChangelog && navLink('/changelog', 'Change Log')}
-            {canManageForms && navLink('/forms', 'Form Management')}
-            {canManageForms && navLink('/admin/merge', 'Field Management')}
-            {isGlobalAdmin && navLink('/admin/users', 'User Management')}
-            {isGlobalAdmin && navLink('/admin/fields', 'Default Fields')}
-            {isGlobalAdmin && navLink('/admin/projects', 'Projects')}
+          <div className="hidden md:flex items-center gap-2 flex-wrap">
+            {navLink('/dashboard', ClipboardList, 'Form View')}
+            {navLink('/browser', Search, 'Browser View')}
+            {canViewChangelog && navLink('/changelog', History, 'Change Log')}
+            {canManageForms && navLink('/forms', Settings, 'Form Management')}
+            {canManageForms && navLink('/admin/merge', ArrowLeftRight, 'Field Management')}
+            {isGlobalAdmin && navLink('/admin/users', Users, 'User Management')}
+            {isGlobalAdmin && navLink('/admin/fields', LayoutTemplate, 'Default Fields')}
+            {isGlobalAdmin && navLink('/admin/projects', Folders, 'Projects')}
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-sm">
-          {projectName && (
-            <a
-              href="/project"
-              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs text-blue-600 transition-colors"
-              title="프로젝트 전환"
-            >
-              <span>📁</span>
-              <span className="max-w-32 truncate">{projectName}</span>
-              <span className="text-blue-400 text-xs">▼</span>
-            </a>
-          )}
+        {/* Right: actions */}
+        <div className="flex items-center gap-3">
           {profile && (
             <span className="hidden sm:inline text-gray-400 text-xs">
               {profile.email}
@@ -119,11 +109,32 @@ export default function Navbar() {
               </span>
             </span>
           )}
+
+          <a
+            href="/"
+            className={`${btnBase} hover:border-blue-400`}
+            title="GIDP Dashboard"
+          >
+            <Home size={16} />
+          </a>
+
+          {projectName && (
+            <a
+              href="/project"
+              className={`${btnBase} hover:border-blue-400`}
+              title="프로젝트 전환"
+            >
+              <FolderKanban size={16} />
+              <span className="max-w-32 truncate">{projectName}</span>
+            </a>
+          )}
+
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
+            className={`${btnBase} hover:border-red-400 hover:text-red-500`}
           >
-            Logout
+            <LogOut size={16} />
+            Sign Out
           </button>
         </div>
       </div>

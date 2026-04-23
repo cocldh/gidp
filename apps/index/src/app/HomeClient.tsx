@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight } from "lucide-react";
+import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
-import { RoleGuard } from "@gidp/ui";
+import { RoleGuard, useUserRole } from "@gidp/ui";
 import { createClient } from "@/lib/supabase-client";
 import UploadModal from "./UploadModal";
 import ChangeLogPanel from "./ChangeLogPanel";
@@ -78,6 +78,18 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [pendingCount, setPendingCount] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const isUndoing = useRef(false);
+
+  const { email: userEmail, moduleAccess } = useUserRole(projectId, "idx");
+
+  const [projectName, setProjectName] = useState<string>("");
+  useEffect(() => {
+    baseSupabase
+      .from("project")
+      .select("project_name")
+      .eq("project_id", projectId)
+      .single()
+      .then(({ data }) => setProjectName(data?.project_name ?? String(projectId)));
+  }, [baseSupabase, projectId]);
 
   // Load favorites for this project
   useEffect(() => {
@@ -522,8 +534,8 @@ function HomeContent({ projectId }: { projectId: number }) {
     <div className="flex flex-col h-screen bg-[#f7f4ef] dark:bg-slate-900 text-gray-900 dark:text-slate-100 p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6 bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700">
-        <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold text-[#000080]">
+        <div className="flex items-center gap-3 flex-1 flex-wrap min-w-0">
+          <h1 className="text-2xl font-bold text-[#000080] mr-1">
             GIDP Master Index
           </h1>
           {!loading && (
@@ -540,13 +552,6 @@ function HomeContent({ projectId }: { projectId: number }) {
               )}
             </span>
           )}
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button onClick={() => setDarkMode((v) => !v)} className={`${btnBase} hover:border-indigo-400`}>
-            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
-            {darkMode ? "Light" : "Dark"}
-          </button>
 
           {/* 컬럼 이름으로 이동 */}
           <div className="relative flex items-center">
@@ -586,7 +591,7 @@ function HomeContent({ projectId }: { projectId: number }) {
             </button>
 
             {showColumnPanel && (
-              <div className="absolute right-0 top-10 z-50 w-80 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl shadow-lg p-3 flex flex-col gap-2">
+              <div className="absolute left-0 top-10 z-50 w-80 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl shadow-lg p-3 flex flex-col gap-2">
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wide flex items-center gap-1">
@@ -709,11 +714,6 @@ function HomeContent({ projectId }: { projectId: number }) {
             Change Log
           </button>
 
-          <button onClick={() => setShowUpload(true)} className={`${btnBase} hover:border-blue-400`}>
-            <Upload size={16} />
-            Upload
-          </button>
-
           {pendingCount > 0 && (
             <button
               onClick={() => saveChanges()}
@@ -728,6 +728,20 @@ function HomeContent({ projectId }: { projectId: number }) {
             </button>
           )}
 
+        </div>
+
+        {/* Right: user info + nav */}
+        <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+          <button onClick={() => setDarkMode((v) => !v)} className={`${btnBase} hover:border-indigo-400`}>
+            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+            {darkMode ? "Light" : "Dark"}
+          </button>
+
+          <button onClick={() => setShowUpload(true)} className={`${btnBase} hover:border-blue-400`}>
+            <Upload size={16} />
+            Upload
+          </button>
+
           <button
             onClick={exportExcel}
             className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -736,12 +750,21 @@ function HomeContent({ projectId }: { projectId: number }) {
             Export to Excel
           </button>
 
+          {userEmail && (
+            <span className="hidden sm:inline text-gray-400 text-xs">
+              {userEmail}
+              <span className="ml-2 px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600 dark:bg-slate-700 dark:text-slate-300">
+                {moduleAccess}
+              </span>
+            </span>
+          )}
+
           <a
             href="/"
             className={`${btnBase} hover:border-blue-400`}
             title="GIDP Dashboard"
           >
-            ← GIDP
+            <Home size={16} />
           </a>
 
           <a
@@ -750,7 +773,7 @@ function HomeContent({ projectId }: { projectId: number }) {
             title="프로젝트 전환"
           >
             <FolderKanban size={16} />
-            Project
+            <span className="max-w-32 truncate">{projectName || "Project"}</span>
           </a>
 
           <button onClick={handleSignOut} className={`${btnBase} hover:border-red-400 hover:text-red-500`}>
