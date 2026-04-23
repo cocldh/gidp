@@ -11,6 +11,9 @@ const ISS_ZONE = process.env.ISS_ZONE_URL || "http://localhost:3001";
 const INDEX_ZONE = process.env.INDEX_ZONE_URL || "http://localhost:3002";
 const DRAWINGS_ZONE = process.env.DRAWINGS_ZONE_URL || "http://localhost:3003";
 
+const devOrigins = (process.env.NEXT_PUBLIC_ALLOWED_DEV_ORIGINS ?? '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
 function zoneRewrites(prefix: string, origin: string) {
   return [
     { source: prefix, destination: `${origin}${prefix}` },
@@ -19,6 +22,7 @@ function zoneRewrites(prefix: string, origin: string) {
 }
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: devOrigins.length ? devOrigins : undefined,
   async rewrites() {
     // beforeFiles: zone rewrites must run before Next.js's filesystem
     // routing. Otherwise `/index` is normalized to `/` (Next.js treats

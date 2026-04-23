@@ -12,6 +12,6 @@ export const config = {
   // 루트('/')는 `/((?!...).*)` 패턴에서 빠지므로 명시적으로 추가.
   matcher: [
     '/',
-    '/((?!_next/static|_next/image|index/_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/|index/_next/|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };
