@@ -111,6 +111,12 @@ importers:
       '@xmldom/xmldom':
         specifier: ^0.8.11
         version: 0.8.13
+      ag-grid-community:
+        specifier: ^31.3.2
+        version: 31.3.4
+      ag-grid-react:
+        specifier: ^31.3.2
+        version: 31.3.4(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -3552,6 +3558,13 @@ snapshots:
   adler-32@1.3.1: {}
 
   ag-grid-community@31.3.4: {}
+
+  ag-grid-react@31.3.4(react-dom@19.2.3(react@19.2.3))(react@19.2.3):
+    dependencies:
+      ag-grid-community: 31.3.4
+      prop-types: 15.8.1
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
 
   ag-grid-react@31.3.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
     dependencies:

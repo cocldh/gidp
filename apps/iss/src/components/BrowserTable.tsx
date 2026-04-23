@@ -1,15 +1,24 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
+import type { GridApi } from 'ag-grid-community'
+import type { ColDef } from 'ag-grid-community'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from './RoleGuard'
 import type { BrowserRow, FieldColumn, Template } from '@/lib/types'
 
-const PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
+const BrowserGrid = dynamic(() => import('./BrowserGrid'), { ssr: false })
 
-type EditKey = string
 type BrowserMode = 'total' | 'form'
-const makeKey = (docId: number, fieldId: number): EditKey => `${docId}_${fieldId}`
+type EditKey = string
+
+const makeKey = (docId: number, fieldName: string): EditKey => `${docId}__${fieldName}`
+
+const NON_EDITABLE_FIELDS = new Set([
+  '_doc_id', '_tag_id', '_select',
+  'tag_number', 'document_number', 'template_code', 'sheet_number', 'revision',
+])
 
 export default function BrowserTable() {
   const supabase = createClient()
@@ -20,24 +29,32 @@ export default function BrowserTable() {
 
   const [projectId, setProjectId] = useState<number | null>(null)
   const [browserMode, setBrowserMode] = useState<BrowserMode>('form')
-  const [rows, setRows] = useState<BrowserRow[]>([])
-  const [columns, setColumns] = useState<FieldColumn[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
-  const [pageSize, setPageSize] = useState(100)
-  const [page, setPage] = useState(0)
-  const [totalHint, setTotalHint] = useState('')
   const [hasSearched, setHasSearched] = useState(false)
-  const [editedCells, setEditedCells] = useState<Record<EditKey, string>>({})
-  const [changedSet, setChangedSet] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
-  const [selectedDocs, setSelectedDocs] = useState<Set<number>>(new Set())
   const [generating, setGenerating] = useState(false)
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({})
-  const tableRef = useRef<HTMLTableElement>(null)
+  const [message, setMessage] = useState('')
+
+  const [rowData, setRowData] = useState<Record<string, unknown>[]>([])
+  const [columnDefs, setColumnDefs] = useState<ColDef[]>([])
+  const [totalHint, setTotalHint] = useState('')
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(100)
+  const PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
+
+  const pendingEdits = useRef<Map<EditKey, string | null>>(new Map())
+  const [pendingCount, setPendingCount] = useState(0)
+
+  const changedSetRef = useRef<Set<string>>(new Set())
+
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<number>>(new Set())
+
+  const gridApiRef = useRef<GridApi | null>(null)
+
+  // ── 데이터 로드 ───────────────────────────────────────────────────────────
 
   useEffect(() => {
     const pid = readProjectIdCookie()
@@ -62,13 +79,14 @@ export default function BrowserTable() {
     if (browserMode === 'form' && !selectedTemplate) return
     setLoading(true)
     setPage(p)
-    setColumnFilters({})
+    pendingEdits.current.clear()
+    setPendingCount(0)
 
     const templateCode = selectedTemplate
       ? templates.find(t => t.template_id === selectedTemplate)?.template_code ?? null
       : null
 
-    const [{ data: colData }, { data: rowData }] = await Promise.all([
+    const [{ data: colData }, { data: rowDataRaw }] = await Promise.all([
       supabase.rpc('iss_get_field_columns', {
         p_project_id: projectId,
         p_template_id: selectedTemplate,
@@ -85,14 +103,13 @@ export default function BrowserTable() {
     let customOrder: string[] = []
     if (templateCode) {
       try {
-        const res = await fetch(
-          `/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
-        )
+        const res = await fetch(`/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`)
         const json = await res.json()
         customOrder = json.order ?? []
       } catch {}
     }
 
+    let fieldCols: FieldColumn[] = []
     if (colData) {
       const typedCols = colData as FieldColumn[]
       const fieldIds = typedCols.map(c => c.field_id)
@@ -117,14 +134,13 @@ export default function BrowserTable() {
         }
         return 0
       })
-      setColumns(enriched)
+      fieldCols = enriched
     }
 
-    if (rowData) {
-      const typed = rowData as BrowserRow[]
+    if (rowDataRaw) {
+      const typed = rowDataRaw as BrowserRow[]
       const hasMore = typed.length > pageSize
       const displayRows = hasMore ? typed.slice(0, pageSize) : typed
-      setRows(displayRows)
       setTotalHint(hasMore ? `${pageSize}+` : `${typed.length}`)
 
       const docIds = displayRows.map(r => r.document_id)
@@ -133,110 +149,152 @@ export default function BrowserTable() {
           .from('document_value_change')
           .select('document_id, field_id')
           .in('document_id', docIds)
-        setChangedSet(
-          new Set(
-            ((changedData ?? []) as Array<{ document_id: number; field_id: number }>).map(
-              d => `${d.document_id}_${d.field_id}`,
-            ),
-          ),
+        const fieldIdToName = new Map(fieldCols.map(c => [c.field_id, c.field_name]))
+        changedSetRef.current = new Set(
+          ((changedData ?? []) as Array<{ document_id: number; field_id: number }>)
+            .map(d => makeKey(d.document_id, fieldIdToName.get(d.field_id) ?? String(d.field_id)))
         )
       } else {
-        setChangedSet(new Set())
+        changedSetRef.current = new Set()
       }
+
+      const flatRows = displayRows.map(row => ({
+        _doc_id: row.document_id,
+        _tag_id: row.tag_id,
+        tag_number: row.tag_number,
+        document_number: row.document_number,
+        template_code: row.template_code,
+        sheet_number: row.sheet_number ?? '',
+        revision: (row.revision_number ?? '') + (row.minor_revision ?? ''),
+        ...row.field_values,
+      }))
+
+      const fixedCols: ColDef[] = [
+        {
+          field: '_select',
+          headerName: '',
+          width: 40, minWidth: 40, maxWidth: 40,
+          pinned: 'left' as const,
+          editable: false, sortable: false, filter: false, resizable: false,
+          cellRenderer: (params: any) => {
+            const docId = params.data?._doc_id
+            if (!docId) return null
+            return (
+              <input
+                type="checkbox"
+                checked={selectedDocIds.has(docId)}
+                onChange={() => toggleDoc(docId)}
+                className="accent-indigo-600"
+                onClick={e => e.stopPropagation()}
+              />
+            )
+          },
+          headerComponent: () => (
+            <input type="checkbox" className="accent-indigo-600" onChange={toggleAllDocs} onClick={e => e.stopPropagation()} />
+          ),
+        },
+        { field: 'tag_number', headerName: 'Tag Number', pinned: 'left' as const, editable: false, width: 140, minWidth: 100 },
+        { field: 'document_number', headerName: 'Document', pinned: 'left' as const, editable: false, width: 160, minWidth: 120 },
+        { field: 'template_code', headerName: 'Template', editable: false, width: 120, minWidth: 80 },
+        { field: 'sheet_number', headerName: 'Sheet', editable: false, width: 70, minWidth: 60 },
+        { field: 'revision', headerName: 'Rev', editable: false, width: 70, minWidth: 50 },
+      ]
+
+      const dynCols: ColDef[] = fieldCols.map(col => ({
+        field: col.field_name,
+        headerName: col.field_name,
+        editable: canEdit,
+        width: 150, minWidth: 80,
+        cellEditor: col.field_name.toLowerCase().includes('note') ? 'agLargeTextCellEditor' : 'agTextCellEditor',
+        cellEditorPopup: col.field_name.toLowerCase().includes('note'),
+      }))
+
+      setRowData(flatRows)
+      setColumnDefs([...fixedCols, ...dynCols])
     } else {
-      setRows([])
+      setRowData([])
       setTotalHint('0')
-      setChangedSet(new Set())
+      changedSetRef.current = new Set()
+      setColumnDefs([])
     }
 
     setHasSearched(true)
     setLoading(false)
-  }, [projectId, selectedTemplate, search, pageSize, browserMode, templates])
+    setSelectedDocIds(new Set())
+  }, [projectId, selectedTemplate, search, pageSize, browserMode, templates, canEdit])
 
-  const filteredRows = rows.filter(row => {
-    for (const [key, val] of Object.entries(columnFilters)) {
-      if (!val.trim()) continue
-      const lower = val.toLowerCase()
-      let cellVal = ''
-      if (key === 'tag_number') cellVal = row.tag_number ?? ''
-      else if (key === 'document_number') cellVal = row.document_number ?? ''
-      else if (key === 'template_code') cellVal = row.template_code ?? ''
-      else if (key === 'sheet_number') cellVal = String(row.sheet_number ?? '')
-      else if (key === 'revision_number') cellVal = (row.revision_number ?? '') + (row.minor_revision ?? '')
-      else cellVal = row.field_values[key] ?? ''
-      if (!cellVal.toLowerCase().includes(lower)) return false
-    }
-    return true
-  })
+  // ── 편집 저장 ─────────────────────────────────────────────────────────────
 
-  const hasActiveFilters = Object.values(columnFilters).some(v => v.trim())
-  const setColFilter = (key: string, val: string) => setColumnFilters(prev => ({ ...prev, [key]: val }))
-
-  const handleSearch = () => loadData(0)
-  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter') handleSearch() }
-
-  const handleTemplateChange = (val: string) => {
-    setSelectedTemplate(val ? parseInt(val) : null)
-    setHasSearched(false)
-    setRows([])
-    setColumns([])
-    setEditedCells({})
-    setColumnFilters({})
-  }
-
-  const handleModeChange = (mode: BrowserMode) => {
-    setBrowserMode(mode)
-    setHasSearched(false)
-    setRows([])
-    setColumns([])
-    setColumnFilters({})
-  }
-
-  const handleCellChange = (docId: number, fieldId: number, value: string) => {
-    setEditedCells(prev => ({ ...prev, [makeKey(docId, fieldId)]: value }))
-  }
+  const onCellValueChanged = useCallback((event: any) => {
+    const { data, colDef, oldValue, newValue } = event
+    const fieldName = colDef.field as string
+    if (NON_EDITABLE_FIELDS.has(fieldName)) return
+    if (oldValue === newValue) return
+    const docId = data._doc_id as number
+    pendingEdits.current.set(makeKey(docId, fieldName), newValue === '' ? null : (newValue as string))
+    setPendingCount(pendingEdits.current.size)
+  }, [])
 
   const handleSave = async () => {
-    const entries = Object.entries(editedCells)
-    if (entries.length === 0) return
+    if (pendingEdits.current.size === 0) return
     setSaving(true)
     setMessage('')
-    const upserts = entries.map(([key, value]) => {
-      const [docId, fieldId] = key.split('_').map(Number)
-      return { document_id: docId, field_id: fieldId, value_text: value || null }
+
+    const fieldNames = Array.from(new Set(
+      Array.from(pendingEdits.current.keys()).map(k => k.split('__')[1])
+    ))
+    const { data: fieldRows } = await iss
+      .from('field_def')
+      .select('field_id, field_name')
+      .in('field_name', fieldNames)
+    const nameToId = new Map((fieldRows ?? []).map((r: any) => [r.field_name, r.field_id]))
+
+    const upserts = Array.from(pendingEdits.current.entries()).flatMap(([key, value]) => {
+      const [docIdStr, fieldName] = key.split('__')
+      const fieldId = nameToId.get(fieldName)
+      if (!fieldId) return []
+      return [{ document_id: parseInt(docIdStr), field_id: fieldId, value_text: value }]
     })
+
     const { error } = await iss
       .from('document_value')
       .upsert(upserts, { onConflict: 'document_id,field_id' })
+
     if (error) {
       setMessage(`Error: ${error.message}`)
     } else {
       setMessage(`Saved ${upserts.length} cell(s)`)
-      setEditedCells({})
-      await loadData(page)
+      pendingEdits.current.clear()
+      setPendingCount(0)
+      gridApiRef.current?.refreshCells({ force: true })
     }
     setSaving(false)
     setTimeout(() => setMessage(''), 3000)
   }
 
-  const hasChanges = Object.keys(editedCells).length > 0
+  // ── 체크박스 선택 ─────────────────────────────────────────────────────────
 
-  const toggleDoc = (docId: number) => {
-    setSelectedDocs(prev => {
+  const toggleDoc = useCallback((docId: number) => {
+    setSelectedDocIds(prev => {
       const next = new Set(prev)
       if (next.has(docId)) next.delete(docId)
       else next.add(docId)
       return next
     })
-  }
+  }, [])
 
-  const toggleAllDocs = () => {
-    if (selectedDocs.size === filteredRows.length) setSelectedDocs(new Set())
-    else setSelectedDocs(new Set(filteredRows.map(r => r.document_id)))
-  }
+  const toggleAllDocs = useCallback(() => {
+    const api = gridApiRef.current
+    if (!api) return
+    const allIds: number[] = []
+    api.forEachNodeAfterFilter(node => { if (node.data?._doc_id) allIds.push(node.data._doc_id) })
+    setSelectedDocIds(prev => prev.size === allIds.length ? new Set() : new Set(allIds))
+  }, [])
 
-  async function handleGenerate() {
-    const ids = Array.from(selectedDocs)
+  // ── PDF 생성 ──────────────────────────────────────────────────────────────
+
+  const handleGenerate = async () => {
+    const ids = Array.from(selectedDocIds)
     if (ids.length === 0) return
     setGenerating(true)
     setMessage('')
@@ -260,7 +318,7 @@ export default function BrowserTable() {
       a.href = url; a.download = filename; a.click()
       URL.revokeObjectURL(url)
       setMessage(`Generated ${ids.length} document(s)`)
-      setSelectedDocs(new Set())
+      setSelectedDocIds(new Set())
     } catch (err) {
       setMessage(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
@@ -269,56 +327,52 @@ export default function BrowserTable() {
     }
   }
 
-  function exportCSV() {
-    if (filteredRows.length === 0) return
-    const fixedHeaders = ['Tag Number', 'Document Number', 'Template', 'Sheet', 'Rev']
-    const fieldHeaders = columns.map(c => c.field_name)
-    const headers = [...fixedHeaders, ...fieldHeaders]
-    const csvRows = [
-      headers.join(','),
-      ...filteredRows.map(row => {
-        const fixed = [row.tag_number, row.document_number, row.template_code, row.sheet_number ?? '', (row.revision_number ?? '') + (row.minor_revision ?? '')]
-        const fieldVals = columns.map(c => row.field_values[c.field_name] ?? '')
-        return [...fixed, ...fieldVals].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
-      }),
-    ]
-    const blob = new Blob(['﻿' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `iss_browser_${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  // ── CSV 내보내기 ──────────────────────────────────────────────────────────
+
+  const exportCSV = () => {
+    gridApiRef.current?.exportDataAsCsv({
+      fileName: `iss_browser_${new Date().toISOString().slice(0, 10)}.csv`,
+      columnKeys: columnDefs
+        .filter(c => c.field && !c.field.startsWith('_'))
+        .map(c => c.field as string),
+    })
   }
 
-  const filterInput = (key: string) => (
-    <input
-      type="text"
-      value={columnFilters[key] ?? ''}
-      onChange={e => setColFilter(key, e.target.value)}
-      placeholder="filter..."
-      className="w-full px-1 py-0.5 text-[10px] border border-gray-300 rounded bg-white focus:outline-none focus:border-blue-400"
-    />
-  )
+  // ── 모드/템플릿 변경 ──────────────────────────────────────────────────────
+
+  const resetGrid = () => {
+    setHasSearched(false)
+    setRowData([])
+    setColumnDefs([])
+    pendingEdits.current.clear()
+    setPendingCount(0)
+  }
+
+  const handleTemplateChange = (val: string) => {
+    setSelectedTemplate(val ? parseInt(val) : null)
+    resetGrid()
+  }
+
+  const handleModeChange = (mode: BrowserMode) => {
+    setBrowserMode(mode)
+    resetGrid()
+  }
 
   if (projectId == null) {
-    return (
-      <div className="text-center text-gray-500 py-8">
-        프로젝트가 선택되지 않았습니다.
-      </div>
-    )
+    return <div className="text-center text-gray-500 py-8">프로젝트가 선택되지 않았습니다.</div>
   }
 
+  const showGrid = !loading && hasSearched && rowData.length > 0
+
   return (
-    <div>
+    <div className="flex flex-col">
+      {/* 탭 */}
       <div className="flex border-b border-gray-200 mb-3">
         {isAdmin && (
           <button
             onClick={() => handleModeChange('total')}
             className={`px-5 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              browserMode === 'total'
-                ? 'border-blue-600 text-blue-700'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              browserMode === 'total' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
             Total Browser
@@ -327,16 +381,15 @@ export default function BrowserTable() {
         <button
           onClick={() => handleModeChange('form')}
           className={`px-5 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            browserMode === 'form'
-              ? 'border-blue-600 text-blue-700'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            browserMode === 'form' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
           }`}
         >
           Form Browser
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-4">
+      {/* 툴바 */}
+      <div className="flex flex-wrap gap-2 mb-3">
         <select
           value={selectedTemplate ?? ''}
           onChange={e => handleTemplateChange(e.target.value)}
@@ -349,15 +402,16 @@ export default function BrowserTable() {
             </option>
           ))}
         </select>
+
         <input
           type="text"
           placeholder="Search tag number..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          onKeyDown={handleKeyDown}
-          className="px-3 py-2 border border-gray-300 rounded text-sm flex-1 min-w-48"
-          style={{ backgroundColor: '#ffffff' }}
+          onKeyDown={e => { if (e.key === 'Enter') loadData(0) }}
+          className="px-3 py-2 border border-gray-300 rounded text-sm flex-1 min-w-48 bg-white"
         />
+
         <select
           value={pageSize}
           onChange={e => { setPageSize(parseInt(e.target.value)); setHasSearched(false) }}
@@ -365,156 +419,63 @@ export default function BrowserTable() {
         >
           {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} rows</option>)}
         </select>
+
         <button
-          onClick={handleSearch}
+          onClick={() => loadData(0)}
           disabled={browserMode === 'form' && !selectedTemplate}
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
-        >Search</button>
+        >
+          Search
+        </button>
+
+        <button
+          onClick={() => gridApiRef.current?.setFilterModel(null)}
+          disabled={!showGrid}
+          className="px-4 py-2 border border-gray-300 rounded text-sm hover:border-red-400 hover:text-red-500 disabled:opacity-40"
+        >
+          Clear Filters
+        </button>
+
         <button
           onClick={exportCSV}
-          disabled={filteredRows.length === 0}
+          disabled={!showGrid}
           className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-sm"
-        >Export CSV</button>
-        {canEdit && selectedDocs.size > 0 && (
-          <button onClick={handleGenerate} disabled={generating}
-            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 text-sm">
-            {generating ? 'Generating...' : `Generate (${selectedDocs.size})`}
+        >
+          Export CSV
+        </button>
+
+        {canEdit && selectedDocIds.size > 0 && (
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 text-sm"
+          >
+            {generating ? 'Generating...' : `Generate (${selectedDocIds.size})`}
           </button>
         )}
-        {canEdit && hasChanges && (
-          <button onClick={handleSave} disabled={saving}
-            className="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 disabled:opacity-50 text-sm font-medium">
-            {saving ? 'Saving...' : `Save Changes (${Object.keys(editedCells).length})`}
+
+        {canEdit && pendingCount > 0 && (
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50 text-sm font-medium"
+          >
+            {saving ? 'Saving...' : `Save Changes (${pendingCount})`}
           </button>
         )}
-        {hasActiveFilters && (
-          <button onClick={() => setColumnFilters({})}
-            className="px-3 py-2 bg-yellow-50 border border-yellow-300 text-yellow-700 rounded text-sm hover:bg-yellow-100">
-            Clear Filters
-          </button>
-        )}
+
         {message && (
-          <span className={`text-sm self-center ${message.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>{message}</span>
+          <span className={`text-sm self-center ${message.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>
+            {message}
+          </span>
         )}
       </div>
 
-      {loading ? (
-        <div className="text-center text-gray-500 py-8">Loading...</div>
-      ) : !hasSearched ? (
-        <div className="text-center text-gray-500 py-8">
-          {browserMode === 'form' && !selectedTemplate
-            ? 'Form Browser requires a template selection'
-            : 'Select a template or enter a search term and click Search'}
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="text-center text-gray-500 py-8">No data found</div>
-      ) : (
-        <div className="overflow-auto max-h-[70vh] border rounded-lg">
-          <table ref={tableRef} className="text-xs border-collapse w-full">
-            <thead className="bg-gray-100 sticky top-0 z-10">
-              <tr>
-                {canEdit && <th className="px-2 py-1.5 border-b text-center w-8"></th>}
-                <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Tag Number</th>
-                <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Document</th>
-                <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Template</th>
-                <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Sheet</th>
-                <th className="px-2 py-1.5 text-left border-b whitespace-nowrap">Rev</th>
-                {columns.map(col => (
-                  <th key={col.field_id} className="px-2 py-1.5 text-left border-b whitespace-nowrap">{col.field_name}</th>
-                ))}
-              </tr>
-              <tr className="bg-white">
-                {canEdit && (
-                  <td className="px-1 py-1 border-b text-center">
-                    <input type="checkbox"
-                      checked={filteredRows.length > 0 && selectedDocs.size === filteredRows.length}
-                      onChange={toggleAllDocs}
-                      className="accent-indigo-600"
-                    />
-                  </td>
-                )}
-                <td className="px-1 py-1 border-b">{filterInput('tag_number')}</td>
-                <td className="px-1 py-1 border-b">{filterInput('document_number')}</td>
-                <td className="px-1 py-1 border-b">{filterInput('template_code')}</td>
-                <td className="px-1 py-1 border-b">{filterInput('sheet_number')}</td>
-                <td className="px-1 py-1 border-b">{filterInput('revision_number')}</td>
-                {columns.map(col => (
-                  <td key={col.field_id} className="px-1 py-1 border-b">{filterInput(col.field_name)}</td>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.length === 0 ? (
-                <tr>
-                  <td colSpan={6 + columns.length + (canEdit ? 1 : 0)} className="text-center text-gray-400 py-6">
-                    No rows match the current filters
-                  </td>
-                </tr>
-              ) : (
-                filteredRows.map(row => (
-                  <tr key={row.document_id} className="hover:bg-gray-50 border-b border-gray-100">
-                    {canEdit && (
-                      <td className="px-2 py-1.5 text-center">
-                        <input type="checkbox"
-                          checked={selectedDocs.has(row.document_id)}
-                          onChange={() => toggleDoc(row.document_id)}
-                          className="accent-indigo-600"
-                        />
-                      </td>
-                    )}
-                    <td className="px-2 py-1.5 whitespace-nowrap">{row.tag_number}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{row.document_number}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{row.template_code}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{row.sheet_number}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{(row.revision_number ?? '') + (row.minor_revision ?? '')}</td>
-                    {columns.map(col => {
-                      const key = makeKey(row.document_id, col.field_id)
-                      const original = row.field_values[col.field_name] ?? ''
-                      const isEdited = key in editedCells
-                      const isRevChanged = changedSet.has(key)
-                      const isNote = col.field_name.toLowerCase().includes('note')
-                      return (
-                        <td key={col.field_id} className={`px-0.5 py-0.5 ${isRevChanged && !isEdited ? 'bg-yellow-50' : ''}`}>
-                          {canEdit ? (
-                            isNote ? (
-                              <textarea
-                                rows={3}
-                                value={isEdited ? editedCells[key] : original}
-                                onChange={e => handleCellChange(row.document_id, col.field_id, e.target.value)}
-                                className={`w-full px-1.5 py-1 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none ${
-                                  isEdited ? 'border-yellow-300 bg-yellow-100' : isRevChanged ? 'border-yellow-400 bg-yellow-50' : 'border-transparent hover:border-gray-300'
-                                }`}
-                              />
-                            ) : (
-                              <input type="text"
-                                value={isEdited ? editedCells[key] : original}
-                                onChange={e => handleCellChange(row.document_id, col.field_id, e.target.value)}
-                                className={`w-full px-1.5 py-1 text-xs border rounded focus:outline-none focus:ring-1 focus:ring-blue-400 ${
-                                  isEdited ? 'border-yellow-300 bg-yellow-100' : isRevChanged ? 'border-yellow-400 bg-yellow-50' : 'border-transparent hover:border-gray-300'
-                                }`}
-                              />
-                            )
-                          ) : (
-                            isNote
-                              ? <span className={`px-1.5 whitespace-pre-wrap ${isRevChanged ? 'bg-yellow-50' : ''}`}>{original}</span>
-                              : <span className={`px-1.5 whitespace-nowrap ${isRevChanged ? 'bg-yellow-50' : ''}`}>{original}</span>
-                          )}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
+      {/* 페이지 상태 */}
       {hasSearched && (
-        <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+        <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
           <span>
-            Page {page + 1} — showing {filteredRows.length} rows
-            {hasActiveFilters && rows.length !== filteredRows.length && ` (filtered from ${rows.length})`}
+            Page {page + 1} · {rowData.length} rows
             {totalHint.endsWith('+') && ' (more available)'}
           </span>
           <div className="flex gap-2">
@@ -524,6 +485,32 @@ export default function BrowserTable() {
               className="px-3 py-1 border rounded hover:bg-gray-100 disabled:opacity-30">Next</button>
           </div>
         </div>
+      )}
+
+      {/* 상태 메시지 */}
+      {!showGrid && (
+        <div className="text-center text-gray-500 py-8">
+          {loading
+            ? 'Loading...'
+            : !hasSearched
+              ? browserMode === 'form' && !selectedTemplate
+                ? 'Form Browser requires a template selection'
+                : 'Select a template or enter a search term and click Search'
+              : 'No data found'}
+        </div>
+      )}
+
+      {/* 그리드 — 데이터가 준비됐을 때만 마운트 (Strict Mode 이중 실행 회피) */}
+      {showGrid && (
+        <BrowserGrid
+          rowData={rowData}
+          columnDefs={columnDefs}
+          canEdit={canEdit}
+          changedSetRef={changedSetRef}
+          pendingEditsRef={pendingEdits}
+          onGridReady={api => { gridApiRef.current = api }}
+          onCellValueChanged={onCellValueChanged}
+        />
       )}
     </div>
   )
