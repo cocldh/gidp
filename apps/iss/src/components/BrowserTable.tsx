@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import ExcelJS from 'exceljs'
+import * as SheetJS from 'xlsx'
 import dynamic from 'next/dynamic'
 import type { GridApi } from 'ag-grid-community'
 import type { ColDef } from 'ag-grid-community'
@@ -401,15 +403,101 @@ export default function BrowserTable() {
     }
   }
 
-  // ── CSV 내보내기 ──────────────────────────────────────────────────────────
+  // ── 내보내기 ──────────────────────────────────────────────────────────────
+
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!exportOpen) return
+    const handler = (e: MouseEvent) => {
+      if (!exportRef.current?.contains(e.target as Node)) setExportOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [exportOpen])
+
+  const visibleColumnKeys = () =>
+    columnDefs
+      .filter(c => c.field && !c.field.startsWith('_'))
+      .map(c => c.field as string)
 
   const exportCSV = () => {
     gridApiRef.current?.exportDataAsCsv({
       fileName: `iss_browser_${new Date().toISOString().slice(0, 10)}.csv`,
-      columnKeys: columnDefs
-        .filter(c => c.field && !c.field.startsWith('_'))
-        .map(c => c.field as string),
+      columnKeys: visibleColumnKeys(),
     })
+    setExportOpen(false)
+  }
+
+  const exportXlsx = async () => {
+    const api = gridApiRef.current
+    if (!api) return
+    setExportOpen(false)
+
+    const keys = visibleColumnKeys()
+    const headers = keys.map(k => columnDefs.find(c => c.field === k)?.headerName ?? k)
+
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('ISS Browser')
+
+    ws.addRow(headers)
+    ws.getRow(1).height = 30
+    ws.getRow(1).eachCell(cell => {
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } }
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F6B8E' } }
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    })
+
+    const maxLen = headers.map(h => h.length)
+    api.forEachNodeAfterFilterAndSort(node => {
+      const vals = keys.map((k, i) => {
+        const v = node.data?.[k] ?? ''
+        const s = v == null ? '' : String(v)
+        if (s.length > maxLen[i]) maxLen[i] = s.length
+        return s
+      })
+      const row = ws.addRow(vals)
+      row.eachCell(cell => { cell.font = { name: 'Calibri', size: 11 } })
+    })
+
+    keys.forEach((_, i) => { ws.getColumn(i + 1).width = Math.min(maxLen[i] + 2, 50) })
+
+    const buf = await wb.xlsx.writeBuffer()
+    triggerDownload(buf, `iss_browser_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+  const exportXlsb = () => {
+    const api = gridApiRef.current
+    if (!api) return
+    setExportOpen(false)
+
+    const keys = visibleColumnKeys()
+    const headers = keys.map(k => columnDefs.find(c => c.field === k)?.headerName ?? k)
+
+    const rows: string[][] = [headers]
+    const maxLen = headers.map(h => h.length)
+    api.forEachNodeAfterFilterAndSort(node => {
+      rows.push(keys.map((k, i) => {
+        const s = node.data?.[k] == null ? '' : String(node.data[k])
+        if (s.length > maxLen[i]) maxLen[i] = s.length
+        return s
+      }))
+    })
+
+    const ws = SheetJS.utils.aoa_to_sheet(rows)
+    ws['!cols'] = maxLen.map(w => ({ wch: Math.min(w + 2, 50) }))
+    const wb = SheetJS.utils.book_new()
+    SheetJS.utils.book_append_sheet(wb, ws, 'ISS Browser')
+    SheetJS.writeFile(wb, `iss_browser_${new Date().toISOString().slice(0, 10)}.xlsb`, { bookType: 'xlsb' })
+  }
+
+  const triggerDownload = (buf: ArrayBuffer | ArrayBufferLike, filename: string) => {
+    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
   }
 
   // ── 모드/템플릿 변경 ──────────────────────────────────────────────────────
@@ -512,13 +600,25 @@ export default function BrowserTable() {
           Clear Filters
         </button>
 
-        <button
-          onClick={exportCSV}
-          disabled={!showGrid}
-          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-sm"
-        >
-          Export CSV
-        </button>
+        <div className="relative" ref={exportRef}>
+          <button
+            onClick={() => setExportOpen(v => !v)}
+            disabled={!showGrid}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-sm flex items-center gap-1"
+          >
+            Export
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {exportOpen && (
+            <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-50" style={{ minWidth: '100%' }}>
+              <button onClick={exportCSV} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100">CSV</button>
+              <button onClick={exportXlsx} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100">XLSX</button>
+              <button onClick={exportXlsb} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100">XLSB</button>
+            </div>
+          )}
+        </div>
 
         {canEdit && selectedDocIds.size > 0 && (
           <button

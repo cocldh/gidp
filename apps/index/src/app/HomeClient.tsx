@@ -454,19 +454,39 @@ function HomeContent({ projectId }: { projectId: number }) {
       .eq("project_id", projectId)
       .order("id");
     if (error || !data) return;
+
     const colNames = columns.filter((c) => c.field !== "id").map((c) => c.field as string);
-    const rows = (data as { data: Record<string, unknown> }[]).map((r) => {
-      const obj: Record<string, unknown> = {};
-      colNames.forEach((col) => {
-        obj[col] = r.data[col] ?? null;
-      });
-      return obj;
+    const rows = (data as { data: Record<string, unknown> }[]).map((r) =>
+      colNames.map((col) => (r.data[col] == null ? "" : String(r.data[col])))
+    );
+
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Master Index");
+
+    ws.addRow(colNames);
+    ws.getRow(1).height = 30;
+    ws.getRow(1).eachCell((cell) => {
+      cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F6B8E" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
-    const XLSX = await import("xlsx");
-    const ws = XLSX.utils.json_to_sheet(rows, { header: colNames });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Master Index");
-    XLSX.writeFile(wb, "Master_Index_export.xlsx");
+
+    const maxLen = colNames.map((h) => h.length);
+    rows.forEach((rowVals) => {
+      const row = ws.addRow(rowVals);
+      row.eachCell((cell) => { cell.font = { name: "Calibri", size: 11 }; });
+      rowVals.forEach((v, i) => { if (v.length > maxLen[i]) maxLen[i] = v.length; });
+    });
+
+    colNames.forEach((_, i) => { ws.getColumn(i + 1).width = Math.min(maxLen[i] + 2, 50); });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "Master_Index_export.xlsx"; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleSignOut = async () => {

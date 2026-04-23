@@ -19,11 +19,13 @@
     "@xmldom/xmldom": "^0.8.11",
     "ag-grid-community": "^31.3.2",
     "ag-grid-react": "^31.3.2",
+    "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@gidp/config": "workspace:*",
