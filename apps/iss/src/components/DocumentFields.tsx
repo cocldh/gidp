@@ -158,7 +158,7 @@ export default function DocumentFields({ documentId, tagId, onRevisionCommit }: 
     if (templateCode && projectId != null) {
       try {
         const res = await fetch(
-          `/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
+          `/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
         )
         const json = await res.json()
         customOrder = json.order ?? []

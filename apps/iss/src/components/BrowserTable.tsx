@@ -86,7 +86,7 @@ export default function BrowserTable() {
     if (templateCode) {
       try {
         const res = await fetch(
-          `/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
+          `/iss/api/column-order?form=${encodeURIComponent(templateCode)}&project_id=${projectId}`,
         )
         const json = await res.json()
         customOrder = json.order ?? []

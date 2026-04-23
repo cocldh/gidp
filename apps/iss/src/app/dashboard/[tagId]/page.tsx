@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Navbar from '@/components/Navbar'
@@ -16,8 +16,8 @@ type DocumentWithTemplate = Document & {
 export default function TagDetailPage() {
   const params = useParams()
   const tagId = parseInt(params.tagId as string)
-  const baseSupabase = createClient()
-  const supabase = baseSupabase.schema('iss')
+  const baseSupabase = useMemo(() => createClient(), [])
+  const supabase = useMemo(() => baseSupabase.schema('iss'), [baseSupabase])
 
   const { hasRole, loading: roleLoading } = useUserRole()
   const canGenerate = !roleLoading && hasRole('Editor')
