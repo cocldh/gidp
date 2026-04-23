@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import Navbar from '@/components/Navbar'
 import RoleGuard from '@/components/RoleGuard'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
@@ -20,8 +20,8 @@ export default function FormsPage() {
 }
 
 function FormsContent() {
-  const baseSupabase = createClient()
-  const supabase = baseSupabase.schema('iss')
+  const baseSupabase = useMemo(() => createClient(), [])
+  const supabase = useMemo(() => baseSupabase.schema('iss'), [baseSupabase])
   const [projectId, setProjectId] = useState<number | null>(null)
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null)

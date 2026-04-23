@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import Navbar from '@/components/Navbar'
@@ -38,8 +38,8 @@ type RawRow = {
 }
 
 export default function ChangelogPage() {
-  const baseSupabase = createClient()
-  const supabase = baseSupabase.schema('iss')
+  const baseSupabase = useMemo(() => createClient(), [])
+  const supabase = useMemo(() => baseSupabase.schema('iss'), [baseSupabase])
   const router = useRouter()
   const { globalRole, hasRole, loading: roleLoading } = useUserRole()
 
@@ -185,7 +185,7 @@ export default function ChangelogPage() {
   if (projectId == null) return <div className="min-h-screen"><Navbar /><div className="p-8 text-gray-500">프로젝트가 선택되지 않았습니다.</div></div>
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-4">
