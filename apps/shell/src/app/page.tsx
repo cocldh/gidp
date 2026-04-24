@@ -123,12 +123,12 @@ export default async function DashboardPage() {
               프로젝트 변경
             </Link>
             {profile.role === 'Admin' && (
-              <a
-                href="/iss/admin"
+              <Link
+                href="/admin/users"
                 className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
               >
-                Admin
-              </a>
+                User Management
+              </Link>
             )}
             <SignOutButton />
           </div>

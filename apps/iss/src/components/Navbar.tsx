@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   Home, FolderKanban, LogOut,
   ClipboardList, Search, History,
-  Settings, ArrowLeftRight, Users, LayoutTemplate, Folders,
+  Settings, ArrowLeftRight, LayoutTemplate, Folders,
 } from 'lucide-react'
 import { createClient, readProjectIdCookie } from '@/lib/supabase-client'
 import { useUserRole } from '@/components/RoleGuard'
@@ -93,7 +93,6 @@ export default function Navbar() {
             {canViewChangelog && navLink('/changelog', History, 'Change Log')}
             {canManageForms && navLink('/forms', Settings, 'Form Management')}
             {canManageForms && navLink('/admin/merge', ArrowLeftRight, 'Field Management')}
-            {isGlobalAdmin && navLink('/admin/users', Users, 'User Management')}
             {isGlobalAdmin && navLink('/admin/fields', LayoutTemplate, 'Default Fields')}
             {isGlobalAdmin && navLink('/admin/projects', Folders, 'Projects')}
           </div>
