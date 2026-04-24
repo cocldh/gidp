@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
+import ExcelJS from "exceljs";
 import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home, Tag, X } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
 import { RoleGuard, useUserRole } from "@gidp/ui";
@@ -82,6 +83,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [colJumpIdx, setColJumpIdx] = useState(0);
 
   const changedCellsRef = useRef<Set<string>>(new Set());
+  const changedCellsInfoRef = useRef<Map<string, { reason: string | null; changedAt: string }>>(new Map());
   const [uncommittedCount, setUncommittedCount] = useState(0);
 
   const pendingChanges = useRef<Map<string, PendingChange>>(new Map());
@@ -204,9 +206,10 @@ function HomeContent({ projectId }: { projectId: number }) {
         .range(0, PAGE - 1),
       idx
         .from("index_audit_log")
-        .select("record_id, column_name")
+        .select("record_id, column_name, change_reason, changed_at")
         .eq("project_id", projectId)
         .eq("committed", false)
+        .order("changed_at", { ascending: false })
         .range(0, 9999),
     ]);
 
@@ -280,11 +283,18 @@ function HomeContent({ projectId }: { projectId: number }) {
       cols.splice(1, 0, tagNumCol);
     }
 
+    type AuditRow = { record_id: number; column_name: string; change_reason: string | null; changed_at: string };
     const changedSet = new Set<string>();
-    for (const r of (auditRes.data as { record_id: number; column_name: string }[] | null) ?? []) {
-      changedSet.add(`${r.record_id}_${r.column_name}`);
+    const infoMap = new Map<string, { reason: string | null; changedAt: string }>();
+    for (const r of (auditRes.data as AuditRow[] | null) ?? []) {
+      const key = `${r.record_id}_${r.column_name}`;
+      changedSet.add(key);
+      if (!infoMap.has(key)) {
+        infoMap.set(key, { reason: r.change_reason, changedAt: r.changed_at });
+      }
     }
     changedCellsRef.current = changedSet;
+    changedCellsInfoRef.current = infoMap;
     setUncommittedCount(changedSet.size);
 
     setColumns(cols);
@@ -421,6 +431,7 @@ function HomeContent({ projectId }: { projectId: number }) {
     }
 
     const trimmedReason = reason.trim() || null;
+    const savedAt = new Date().toISOString();
     for (const change of allChanges) {
       const tagNumber = change.rowNode.data["1_TAG NUMBER"] ?? null;
       await idx.from("index_audit_log").insert({
@@ -434,7 +445,9 @@ function HomeContent({ projectId }: { projectId: number }) {
         committed: false,
         change_reason: trimmedReason,
       });
-      changedCellsRef.current.add(`${change.recordId}_${change.fieldName}`);
+      const key = `${change.recordId}_${change.fieldName}`;
+      changedCellsRef.current.add(key);
+      changedCellsInfoRef.current.set(key, { reason: trimmedReason, changedAt: savedAt });
     }
     setUncommittedCount(changedCellsRef.current.size);
 
@@ -445,18 +458,63 @@ function HomeContent({ projectId }: { projectId: number }) {
     gridApiRef.current?.refreshCells({ force: true });
   };
 
-  const exportExcel = () => {
+  const exportExcel = async () => {
     const api = gridApiRef.current;
     if (!api) return;
 
-    const columnKeys = columns
-      .filter((c) => c.field && c.field !== "id")
-      .map((c) => c.field as string);
+    const filteredCols = columns.filter((c) => c.field && c.field !== "id");
+    const columnKeys = filteredCols.map((c) => c.field as string);
+    const headers = filteredCols.map((c) => (c.headerName ?? c.field) as string);
 
-    api.exportDataAsCsv({
-      fileName: "Master_Index_export.csv",
-      columnKeys,
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Master Index");
+
+    ws.addRow(headers);
+    ws.getRow(1).height = 30;
+    ws.getRow(1).eachCell((cell) => {
+      cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F6B8E" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
+
+    const maxLen = headers.map((h) => h.length);
+    api.forEachNodeAfterFilterAndSort((node) => {
+      const recordId = node.data?.id as number | undefined;
+      const vals = columnKeys.map((k, i) => {
+        const v = node.data?.[k];
+        const s = (v == null || v === "") ? null : String(v);
+        if (s != null && s.length > maxLen[i]) maxLen[i] = s.length;
+        return s;
+      });
+      const row = ws.addRow(vals);
+      columnKeys.forEach((k, i) => {
+        const key = recordId != null ? `${recordId}_${k}` : null;
+        const isPending = key != null && pendingChanges.current.has(key);
+        const isChanged = key != null && changedCellsRef.current.has(key);
+        if (vals[i] != null || isPending || isChanged) {
+          const cell = row.getCell(i + 1);
+          cell.font = { name: "Calibri", size: 11 };
+          if (isPending) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE68A" } };
+          } else if (isChanged) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEFCE8" } };
+          }
+        }
+      });
+    });
+
+    columnKeys.forEach((_, i) => { ws.getColumn(i + 1).width = Math.min(maxLen[i] + 2, 50); });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Master_Index_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   const handleSignOut = async () => {
@@ -977,6 +1035,12 @@ function HomeContent({ projectId }: { projectId: number }) {
               gridApiRef.current = api;
             }}
             isChangedCell={(recordId, colName) => changedCellsRef.current.has(`${recordId}_${colName}`)}
+            getChangedCellTooltip={(recordId, colName) => {
+              const info = changedCellsInfoRef.current.get(`${recordId}_${colName}`);
+              if (!info) return undefined;
+              const date = new Date(info.changedAt).toLocaleDateString("ko-KR");
+              return info.reason ? `변경 이유: ${info.reason}\n변경일: ${date}` : `변경일: ${date}`;
+            }}
             onUndo={handleUndo}
           />
         ) : (

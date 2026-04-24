@@ -14,6 +14,7 @@ interface DataGridProps {
   onCellValueChanged: (event: any) => void;
   onGridReady?: (api: GridApi) => void;
   isChangedCell: (recordId: number, colName: string) => boolean;
+  getChangedCellTooltip: (recordId: number, colName: string) => string | undefined;
   onUndo: () => void;
 }
 
@@ -40,7 +41,7 @@ function rangeKeys(sel: RangeSel): Set<string> {
 }
 
 
-export default function DataGrid({ columns, rowData, totalRows, onCellValueChanged, onGridReady, isChangedCell, onUndo }: DataGridProps) {
+export default function DataGrid({ columns, rowData, totalRows, onCellValueChanged, onGridReady, isChangedCell, getChangedCellTooltip, onUndo }: DataGridProps) {
   // "All" shows up as the exact row count — AG Grid Community's selector only supports numeric options.
   const pageSizeOptions = useMemo(() => {
     const opts: number[] = [100, 500, 1000, 5000];
@@ -356,6 +357,7 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
         suppressHorizontalScroll={false}
         alwaysShowVerticalScroll={true}
         {...{ suppressUndoRedoCellEditing: true } as any}
+        enableBrowserTooltips={true}
         defaultColDef={{
           resizable: true,
           sortable: true,
@@ -374,6 +376,13 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
             }
             // null 대신 "" 반환 — AG Grid는 null 시 이전 인라인 스타일을 지우지 않음
             return { backgroundColor: "" };
+          },
+          tooltipValueGetter: (params) => {
+            const recordId = params.data?.id;
+            const colDef = params.colDef as ColDef | null | undefined;
+            const field = colDef?.field;
+            if (recordId == null || !field || field === "id") return undefined;
+            return getChangedCellTooltip(recordId, field);
           },
         }}
       />

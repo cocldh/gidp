@@ -451,14 +451,28 @@ export default function BrowserTable() {
 
     const maxLen = headers.map(h => h.length)
     api.forEachNodeAfterFilterAndSort(node => {
+      const docId = node.data?._doc_id as number | undefined
       const vals = keys.map((k, i) => {
-        const v = node.data?.[k] ?? ''
-        const s = v == null ? '' : String(v)
-        if (s.length > maxLen[i]) maxLen[i] = s.length
+        const v = node.data?.[k]
+        const s = (v == null || v === '') ? null : String(v)
+        if (s != null && s.length > maxLen[i]) maxLen[i] = s.length
         return s
       })
       const row = ws.addRow(vals)
-      row.eachCell(cell => { cell.font = { name: 'Calibri', size: 11 } })
+      keys.forEach((k, i) => {
+        const editKey = docId != null ? makeKey(docId, k) : null
+        const isPending = editKey != null && pendingEdits.current.has(editKey)
+        const isChanged = editKey != null && changedSetRef.current.has(editKey)
+        if (vals[i] != null || isPending || isChanged) {
+          const cell = row.getCell(i + 1)
+          cell.font = { name: 'Calibri', size: 11 }
+          if (isPending) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDE68A' } }
+          } else if (isChanged) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEFCE8' } }
+          }
+        }
+      })
     })
 
     keys.forEach((_, i) => { ws.getColumn(i + 1).width = Math.min(maxLen[i] + 2, 50) })
@@ -493,11 +507,15 @@ export default function BrowserTable() {
   }
 
   const triggerDownload = (buf: ArrayBuffer | ArrayBufferLike, filename: string) => {
-    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: 'application/octet-stream' })
+    const blob = new Blob([new Uint8Array(buf as ArrayBuffer)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 10000)
   }
 
   // ── 모드/템플릿 변경 ──────────────────────────────────────────────────────
