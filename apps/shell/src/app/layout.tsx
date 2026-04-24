@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GIDP",
+  title: "GIDP : HOME",
   description: "GS Instrument Data Platform",
 };
 

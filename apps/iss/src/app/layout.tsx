@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ISS Web",
-  description: "Instrument Specification Sheet Management",
+  title: "GIDP : ISS",
+  description: "GS Instrument Data Platform — Instrument Specification Sheet",
 };
 
 export default function RootLayout({

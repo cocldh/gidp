@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home } from "lucide-react";
+import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home, Tag, X } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
 import { RoleGuard, useUserRole } from "@gidp/ui";
 import { createClient } from "@/lib/supabase-client";
 import UploadModal from "./UploadModal";
 import ChangeLogPanel from "./ChangeLogPanel";
+import AddTagPanel from "./AddTagPanel";
 
 const DataGrid = dynamic(() => import("./DataGrid"), { ssr: false });
 
@@ -68,6 +69,12 @@ function HomeContent({ projectId }: { projectId: number }) {
 
   const [showUpload, setShowUpload] = useState(false);
   const [showChangeLog, setShowChangeLog] = useState(false);
+  const [showAddTag, setShowAddTag] = useState(false);
+
+  const [showAddColumnInput, setShowAddColumnInput] = useState(false);
+  const [newColumnName, setNewColumnName] = useState("");
+  const [isAddingColumn, setIsAddingColumn] = useState(false);
+  const [addColumnError, setAddColumnError] = useState("");
 
   const [colJumpQuery, setColJumpQuery] = useState("");
   const [colJumpMatches, setColJumpMatches] = useState<string[]>([]);
@@ -472,6 +479,85 @@ function HomeContent({ projectId }: { projectId: number }) {
     window.location.assign('/login');
   };
 
+  const handleTagAdded = (newRow: Record<string, unknown>) => {
+    if (gridApiRef.current && !gridApiRef.current.isDestroyed()) {
+      gridApiRef.current.applyTransaction({ add: [newRow] });
+    }
+    setDisplayRowCount((prev) => prev + 1);
+    setTotalRows((prev) => prev + 1);
+  };
+
+  // Grid-scan helpers for AddTagPanel — always reads the live AG Grid store,
+  // so they work even when rowData state only holds the first chunk.
+  const checkTagExists = useCallback((tagCol: string, tag: string): boolean => {
+    let found = false;
+    gridApiRef.current?.forEachNode((node) => {
+      if (!found && String(node.data?.[tagCol] ?? "").trim() === tag) found = true;
+    });
+    return found;
+  }, []);
+
+  const getLoopTagInfo = useCallback(
+    (loopCol: string, loopOrdCol: string | undefined, loop: string): { count: number; maxOrder: number | null } => {
+      let count = 0;
+      let maxOrder: number | null = null;
+      gridApiRef.current?.forEachNode((node) => {
+        if (String(node.data?.[loopCol] ?? "").trim() !== loop) return;
+        count++;
+        if (!loopOrdCol) return;
+        const ord = node.data?.[loopOrdCol];
+        const num = typeof ord === "number" ? ord : parseInt(String(ord ?? ""), 10);
+        if (!isNaN(num) && (maxOrder === null || num > maxOrder)) maxOrder = num;
+      });
+      return { count, maxOrder };
+    },
+    [],
+  );
+
+  const handleAddColumn = async () => {
+    const name = newColumnName.trim().toUpperCase();
+    if (!name) return;
+    if (columns.some((c) => c.field === name)) {
+      setAddColumnError("이미 존재하는 컬럼입니다.");
+      return;
+    }
+    setIsAddingColumn(true);
+    setAddColumnError("");
+    const maxOrderIndex = columns.filter((c) => c.field !== "id").length;
+    const { error } = await idx.from("index_column").insert({
+      project_id: projectId,
+      column_name: name,
+      order_index: maxOrderIndex + 1,
+    });
+    if (error) {
+      setAddColumnError(error.message);
+      setIsAddingColumn(false);
+      return;
+    }
+    const newCol: ColDef = { field: name, headerName: name, editable: true, sortable: true, width: 150 };
+    setColumns((prev) => [...prev, newCol]);
+    localStorage.removeItem(`index_col_widths_${projectId}`);
+    setNewColumnName("");
+    setShowAddColumnInput(false);
+    setIsAddingColumn(false);
+  };
+
+  const handleDeleteColumn = async (field: string) => {
+    if (field === "id") return;
+    const tagCol = columns.find((c) => c.field?.replace(/^\d+_/, "").toUpperCase() === "TAG NUMBER")?.field;
+    if (field === tagCol) return;
+    if (!window.confirm(`"${field}" 컬럼을 삭제할까요?\n\n그리드에서 숨겨지며, 기존 데이터는 DB에 보존됩니다.`)) return;
+    const { error } = await idx
+      .from("index_column")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("column_name", field);
+    if (error) { console.error(error); return; }
+    setColumns((prev) => prev.filter((c) => c.field !== field));
+    setHiddenFields((prev) => { const next = new Set(prev); next.delete(field); return next; });
+    localStorage.removeItem(`index_col_widths_${projectId}`);
+  };
+
   const toggleColumn = (field: string) => {
     setHiddenFields((prev) => {
       const next = new Set(prev);
@@ -704,28 +790,94 @@ function HomeContent({ projectId }: { projectId: number }) {
                   </div>
 
                   <div className="max-h-64 overflow-y-auto space-y-0.5">
-                    {filteredFields.map((field) => (
-                      <label
-                        key={field}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!hiddenFields.has(field)}
-                          onChange={() => toggleColumn(field)}
-                          className="accent-blue-500"
-                        />
-                        <span className="text-sm text-gray-700 dark:text-slate-300 truncate">{field}</span>
-                      </label>
-                    ))}
+                    {filteredFields.map((field) => {
+                      const isTagCol = field.replace(/^\d+_/, "").toUpperCase() === "TAG NUMBER";
+                      return (
+                        <div
+                          key={field}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 dark:hover:bg-slate-700 group"
+                        >
+                          <label className="flex items-center gap-2 flex-1 cursor-pointer min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={!hiddenFields.has(field)}
+                              onChange={() => toggleColumn(field)}
+                              className="accent-blue-500 shrink-0"
+                            />
+                            <span className="text-sm text-gray-700 dark:text-slate-300 truncate">{field}</span>
+                          </label>
+                          {!isTagCol && (
+                            <button
+                              onClick={() => handleDeleteColumn(field)}
+                              className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 shrink-0 transition-opacity"
+                              title="컬럼 삭제"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                     {filteredFields.length === 0 && (
                       <p className="text-xs text-gray-400 text-center py-4">No columns found</p>
+                    )}
+                  </div>
+
+                  {/* Add column */}
+                  <div className="border-t border-gray-100 dark:border-slate-700 pt-2 mt-1">
+                    {showAddColumnInput ? (
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex gap-1">
+                          <input
+                            autoFocus
+                            type="text"
+                            placeholder="New column name..."
+                            value={newColumnName}
+                            onChange={(e) => { setNewColumnName(e.target.value); setAddColumnError(""); }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleAddColumn();
+                              if (e.key === "Escape") { setShowAddColumnInput(false); setNewColumnName(""); setAddColumnError(""); }
+                            }}
+                            className="flex-1 text-xs border border-gray-200 dark:border-slate-600 rounded-md px-2 py-1.5 outline-none bg-transparent dark:text-slate-200 focus:border-blue-400"
+                          />
+                          <button
+                            onClick={handleAddColumn}
+                            disabled={isAddingColumn || !newColumnName.trim()}
+                            className="text-xs bg-blue-500 hover:bg-blue-600 disabled:opacity-60 text-white px-2 py-1 rounded-md flex items-center gap-1"
+                          >
+                            {isAddingColumn ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+                            Add
+                          </button>
+                          <button
+                            onClick={() => { setShowAddColumnInput(false); setNewColumnName(""); setAddColumnError(""); }}
+                            className="text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 px-1"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                        {addColumnError && <p className="text-xs text-red-500">{addColumnError}</p>}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setShowAddColumnInput(true)}
+                        className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 transition-colors"
+                      >
+                        <Plus size={12} /> Add Column
+                      </button>
                     )}
                   </div>
                 </div>
               </div>
             )}
           </div>
+
+          <button
+            onClick={() => setShowAddTag(true)}
+            className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Tag size={16} />
+            Add Tag
+          </button>
 
           <button onClick={() => setShowChangeLog(true)} className={`${btnBase} hover:border-purple-400`}>
             <History size={16} />
@@ -843,6 +995,16 @@ function HomeContent({ projectId }: { projectId: number }) {
         onClose={() => setShowChangeLog(false)}
         uncommittedCount={uncommittedCount}
         onCommit={handleCommit}
+      />
+      <AddTagPanel
+        open={showAddTag}
+        projectId={projectId}
+        columnFields={allFields}
+        isStreaming={isStreaming}
+        checkTagExists={checkTagExists}
+        getLoopTagInfo={getLoopTagInfo}
+        onClose={() => setShowAddTag(false)}
+        onTagAdded={handleTagAdded}
       />
     </div>
   );
