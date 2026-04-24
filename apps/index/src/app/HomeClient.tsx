@@ -75,6 +75,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [newColumnName, setNewColumnName] = useState("");
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [addColumnError, setAddColumnError] = useState("");
+  const [deleteColumnTarget, setDeleteColumnTarget] = useState<string | null>(null);
 
   const [colJumpQuery, setColJumpQuery] = useState("");
   const [colJumpMatches, setColJumpMatches] = useState<string[]>([]);
@@ -89,7 +90,8 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [isSaving, setIsSaving] = useState(false);
   const isUndoing = useRef(false);
 
-  const { email: userEmail, moduleAccess } = useUserRole(projectId, "idx");
+  const { email: userEmail, moduleAccess, isProjectRole, hasModuleAccess } = useUserRole(projectId, "idx");
+  const canDeleteColumn = isProjectRole("ProjectAdmin");
 
   const [projectName, setProjectName] = useState<string>("");
   useEffect(() => {
@@ -542,11 +544,17 @@ function HomeContent({ projectId }: { projectId: number }) {
     setIsAddingColumn(false);
   };
 
-  const handleDeleteColumn = async (field: string) => {
+  const handleDeleteColumn = (field: string) => {
     if (field === "id") return;
     const tagCol = columns.find((c) => c.field?.replace(/^\d+_/, "").toUpperCase() === "TAG NUMBER")?.field;
     if (field === tagCol) return;
-    if (!window.confirm(`"${field}" 컬럼을 삭제할까요?\n\n그리드에서 숨겨지며, 기존 데이터는 DB에 보존됩니다.`)) return;
+    setDeleteColumnTarget(field);
+  };
+
+  const confirmDeleteColumn = async () => {
+    if (!deleteColumnTarget) return;
+    const field = deleteColumnTarget;
+    setDeleteColumnTarget(null);
     const { error } = await idx
       .from("index_column")
       .delete()
@@ -806,11 +814,12 @@ function HomeContent({ projectId }: { projectId: number }) {
                             />
                             <span className="text-sm text-gray-700 dark:text-slate-300 truncate">{field}</span>
                           </label>
-                          {!isTagCol && (
+                          {!isTagCol && hasModuleAccess("Editor") && (
                             <button
-                              onClick={() => handleDeleteColumn(field)}
-                              className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 shrink-0 transition-opacity"
-                              title="컬럼 삭제"
+                              onClick={() => canDeleteColumn && handleDeleteColumn(field)}
+                              disabled={!canDeleteColumn}
+                              className="opacity-0 group-hover:opacity-100 shrink-0 transition-opacity disabled:cursor-not-allowed disabled:text-gray-300 dark:disabled:text-slate-600 text-gray-400 hover:enabled:text-red-500"
+                              title={canDeleteColumn ? "컬럼 삭제" : "Admin 또는 Project Admin만 삭제할 수 있습니다"}
                             >
                               <Trash2 size={12} />
                             </button>
@@ -1006,6 +1015,42 @@ function HomeContent({ projectId }: { projectId: number }) {
         onClose={() => setShowAddTag(false)}
         onTagAdded={handleTagAdded}
       />
+
+      {deleteColumnTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/40 flex items-center justify-center">
+                <Trash2 size={18} className="text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">칼럼 삭제</h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
+                  이 작업은 되돌릴 수 없습니다.
+                </p>
+              </div>
+            </div>
+            <div className="mb-5 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
+              <span className="font-medium break-all">&ldquo;{deleteColumnTarget}&rdquo;</span> 칼럼이 DB에서 영구 삭제됩니다.
+              기존 레코드에 입력된 해당 칼럼의 데이터도 함께 삭제됩니다.
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteColumnTarget(null)}
+                className="px-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={confirmDeleteColumn}
+                className="px-4 py-2 text-sm rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium transition-colors"
+              >
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
