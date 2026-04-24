@@ -13,6 +13,7 @@ interface AuditLog {
   new_value: string | null;
   changed_by: string | null;
   changed_at: string;
+  change_reason: string | null;
   commit_description: string | null;
 }
 
@@ -41,6 +42,7 @@ export default function ChangeLogPanel({
   const [filterColumn, setFilterColumn] = useState("");
   const [commitDesc, setCommitDesc] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
+  const [userNames, setUserNames] = useState<Map<string, string>>(new Map());
 
   const fetchLogs = useCallback(
     async (currentPage: number, tagNumber: string, column: string) => {
@@ -58,9 +60,27 @@ export default function ChangeLogPanel({
       if (column.trim()) query = query.ilike("column_name", `%${column.trim()}%`);
 
       const { data, count, error } = await query;
-      if (!error) {
-        setLogs((data as AuditLog[] | null) ?? []);
+      if (!error && data) {
+        const rows = data as AuditLog[];
+        setLogs(rows);
         setTotal(count ?? 0);
+
+        const distinctIds = [...new Set(rows.map((r) => r.changed_by).filter(Boolean))] as string[];
+        if (distinctIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from("user_profile")
+            .select("id, display_name, email")
+            .in("id", distinctIds);
+          if (profiles) {
+            setUserNames((prev) => {
+              const next = new Map(prev);
+              for (const p of profiles as { id: string; display_name: string | null; email: string }[]) {
+                next.set(p.id, p.display_name || p.email);
+              }
+              return next;
+            });
+          }
+        }
       }
       setLoading(false);
     },
@@ -194,7 +214,7 @@ export default function ChangeLogPanel({
             <table className="w-full text-sm border-collapse">
               <thead className="sticky top-0 bg-gray-50 dark:bg-slate-700 z-10">
                 <tr>
-                  {["Changed At", "Tag Number", "Column", "Old Value", "New Value", "Commit Description", "Changed By"].map(
+                  {["Changed At", "Tag Number", "Column", "Old Value", "New Value", "Change Reason", "Commit Description", "Changed By"].map(
                     (h) => (
                       <th
                         key={h}
@@ -242,7 +262,15 @@ export default function ChangeLogPanel({
                         {log.new_value ?? <span className="text-gray-300 dark:text-slate-600">—</span>}
                       </span>
                     </td>
-                    <td className="px-4 py-2 max-w-[200px]">
+                    <td className="px-4 py-2 max-w-[180px]">
+                      <span
+                        className="block truncate text-violet-600 dark:text-violet-400 text-xs"
+                        title={log.change_reason ?? ""}
+                      >
+                        {log.change_reason ?? <span className="text-gray-300 dark:text-slate-600">—</span>}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 max-w-[180px]">
                       <span
                         className="block truncate text-gray-500 dark:text-slate-400 text-xs italic"
                         title={log.commit_description ?? ""}
@@ -250,8 +278,10 @@ export default function ChangeLogPanel({
                         {log.commit_description ?? <span className="text-gray-300 dark:text-slate-600">—</span>}
                       </span>
                     </td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-slate-400 text-xs whitespace-nowrap">
-                      {log.changed_by ? log.changed_by.slice(0, 8) : "—"}
+                    <td className="px-4 py-2 text-gray-500 dark:text-slate-400 text-xs whitespace-nowrap max-w-[160px]">
+                      <span className="block truncate" title={log.changed_by ?? ""}>
+                        {log.changed_by ? (userNames.get(log.changed_by) ?? log.changed_by.slice(0, 8)) : "—"}
+                      </span>
                     </td>
                   </tr>
                 ))}

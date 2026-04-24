@@ -7,7 +7,6 @@ import type { ColDef, GridApi } from "ag-grid-community";
 import { RoleGuard, useUserRole } from "@gidp/ui";
 import { createClient } from "@/lib/supabase-client";
 import UploadModal from "./UploadModal";
-import ChangeLogPanel from "./ChangeLogPanel";
 import AddTagPanel from "./AddTagPanel";
 
 const DataGrid = dynamic(() => import("./DataGrid"), { ssr: false });
@@ -68,8 +67,9 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [showSaveInput, setShowSaveInput] = useState(false);
 
   const [showUpload, setShowUpload] = useState(false);
-  const [showChangeLog, setShowChangeLog] = useState(false);
   const [showAddTag, setShowAddTag] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveReason, setSaveReason] = useState("");
 
   const [showAddColumnInput, setShowAddColumnInput] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
@@ -394,26 +394,7 @@ function HomeContent({ projectId }: { projectId: number }) {
     last.rowNode.setDataValue(last.fieldName, last.oldValue);
   }, []);
 
-  const handleCommit = async (description: string) => {
-    const { error } = await idx
-      .from("index_audit_log")
-      .update({ committed: true, commit_description: description.trim() || null })
-      .eq("project_id", projectId)
-      .eq("committed", false);
-    if (!error) {
-      // Also mark all uncommitted records as committed
-      await idx
-        .from("index_record")
-        .update({ is_committed: true })
-        .eq("project_id", projectId)
-        .eq("is_committed", false);
-      changedCellsRef.current.clear();
-      setUncommittedCount(0);
-      gridApiRef.current?.refreshCells({ force: true });
-    }
-  };
-
-  const saveChanges = async () => {
+  const saveChanges = async (reason: string) => {
     if (pendingChanges.current.size === 0) return;
     setIsSaving(true);
 
@@ -439,6 +420,7 @@ function HomeContent({ projectId }: { projectId: number }) {
       if (error) console.error(error);
     }
 
+    const trimmedReason = reason.trim() || null;
     for (const change of allChanges) {
       const tagNumber = change.rowNode.data["1_TAG NUMBER"] ?? null;
       await idx.from("index_audit_log").insert({
@@ -450,6 +432,7 @@ function HomeContent({ projectId }: { projectId: number }) {
         new_value: change.currentValue != null ? String(change.currentValue) : null,
         changed_by: userId,
         committed: false,
+        change_reason: trimmedReason,
       });
       changedCellsRef.current.add(`${change.recordId}_${change.fieldName}`);
     }
@@ -888,14 +871,23 @@ function HomeContent({ projectId }: { projectId: number }) {
             Add Tag
           </button>
 
-          <button onClick={() => setShowChangeLog(true)} className={`${btnBase} hover:border-purple-400`}>
+          <button
+            onClick={() =>
+              window.open(
+                `/index/changelog?projectId=${projectId}`,
+                "changelog",
+                "width=1400,height=750,resizable=yes,scrollbars=yes",
+              )
+            }
+            className={`${btnBase} hover:border-purple-400`}
+          >
             <History size={16} />
             Change Log
           </button>
 
           {pendingCount > 0 && (
             <button
-              onClick={() => saveChanges()}
+              onClick={() => setShowSaveModal(true)}
               disabled={isSaving}
               className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
             >
@@ -998,13 +990,6 @@ function HomeContent({ projectId }: { projectId: number }) {
         onClose={() => setShowUpload(false)}
         onUploadComplete={loadData}
       />
-      <ChangeLogPanel
-        open={showChangeLog}
-        projectId={projectId}
-        onClose={() => setShowChangeLog(false)}
-        uncommittedCount={uncommittedCount}
-        onCommit={handleCommit}
-      />
       <AddTagPanel
         open={showAddTag}
         projectId={projectId}
@@ -1015,6 +1000,64 @@ function HomeContent({ projectId }: { projectId: number }) {
         onClose={() => setShowAddTag(false)}
         onTagAdded={handleTagAdded}
       />
+
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="shrink-0 w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+                <Save size={18} className="text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">변경 사항 저장</h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
+                  {pendingCount}개 셀의 변경 내용을 저장합니다.
+                </p>
+              </div>
+            </div>
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1.5">
+                변경 사유 <span className="text-gray-400 dark:text-slate-500 font-normal">(선택)</span>
+              </label>
+              <input
+                type="text"
+                autoFocus
+                placeholder="예: 현장 검토 후 태그번호 수정"
+                value={saveReason}
+                onChange={(e) => setSaveReason(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !isSaving) {
+                    setShowSaveModal(false);
+                    saveChanges(saveReason).then(() => setSaveReason(""));
+                  } else if (e.key === "Escape") {
+                    setShowSaveModal(false);
+                    setSaveReason("");
+                  }
+                }}
+                className="w-full text-sm border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-amber-400 bg-white dark:bg-slate-700 dark:text-slate-200 placeholder-gray-400"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowSaveModal(false); setSaveReason(""); }}
+                className="px-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-slate-600 text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  setShowSaveModal(false);
+                  saveChanges(saveReason).then(() => setSaveReason(""));
+                }}
+                disabled={isSaving}
+                className="px-4 py-2 text-sm rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white font-medium transition-colors"
+              >
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteColumnTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
