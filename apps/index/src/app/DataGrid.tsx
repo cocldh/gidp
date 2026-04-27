@@ -372,7 +372,7 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
               return { backgroundColor: "#bfdbfe" };
             }
             if (params.colDef.field !== "id" && isChangedCell(params.data?.id, params.colDef.field as string)) {
-              return { backgroundColor: "#fefce8" };
+              return { backgroundColor: "#ffff00" };
             }
             // null 대신 "" 반환 — AG Grid는 null 시 이전 인라인 스타일을 지우지 않음
             return { backgroundColor: "" };
