@@ -495,9 +495,9 @@ function HomeContent({ projectId }: { projectId: number }) {
           const cell = row.getCell(i + 1);
           cell.font = { name: "Calibri", size: 11 };
           if (isPending) {
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE68A" } };
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
           } else if (isChanged) {
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEFCE8" } };
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
           }
         }
       });
@@ -978,7 +978,7 @@ function HomeContent({ projectId }: { projectId: number }) {
             className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
           >
             <Download size={16} />
-            Export to CSV
+            Export to Excel
           </button>
 
           {userEmail && (
