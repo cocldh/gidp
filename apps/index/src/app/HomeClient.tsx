@@ -923,7 +923,9 @@ function HomeContent({ projectId }: { projectId: number }) {
 
           <button
             onClick={() => setShowAddTag(true)}
-            className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            disabled={!hasModuleAccess("Editor")}
+            title={!hasModuleAccess("Editor") ? "Viewer 권한으로는 Tag를 추가할 수 없습니다" : undefined}
+            className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-500"
           >
             <Tag size={16} />
             Add Tag
@@ -966,10 +968,12 @@ function HomeContent({ projectId }: { projectId: number }) {
             {darkMode ? "Light" : "Dark"}
           </button>
 
-          <button onClick={() => setShowUpload(true)} className={`${btnBase} hover:border-blue-400`}>
-            <Upload size={16} />
-            Upload
-          </button>
+          {isProjectRole("ProjectAdmin") && (
+            <button onClick={() => setShowUpload(true)} className={`${btnBase} hover:border-blue-400`}>
+              <Upload size={16} />
+              Upload
+            </button>
+          )}
 
           <button
             onClick={exportExcel}

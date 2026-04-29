@@ -51,18 +51,28 @@ export default async function DashboardPage() {
     idx: 'None',
     drawings: 'None',
   }
+  let projectRole: string | null = null
 
   if (profile.role === 'Admin') {
     moduleAccess = { iss: 'Admin', idx: 'Admin', drawings: 'Admin' }
   } else {
-    const { data: rows } = await supabase
-      .from('user_project_module')
-      .select('module, access')
-      .eq('user_id', user.id)
-      .eq('project_id', projectId)
+    const [{ data: rows }, { data: upr }] = await Promise.all([
+      supabase
+        .from('user_project_module')
+        .select('module, access')
+        .eq('user_id', user.id)
+        .eq('project_id', projectId),
+      supabase
+        .from('user_project_role')
+        .select('role')
+        .eq('user_id', user.id)
+        .eq('project_id', projectId)
+        .maybeSingle(),
+    ])
     for (const row of rows ?? []) {
       moduleAccess[row.module as ModuleName] = row.access as ModuleAccess
     }
+    projectRole = upr?.role ?? null
   }
 
   const tools: ToolCard[] = [
@@ -108,11 +118,21 @@ export default async function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-gray-500">
+            <span className="text-gray-500 flex items-center gap-1.5">
               {displayName}
-              {profile.role === 'Admin' && (
-                <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
+              {profile.role === 'Admin' ? (
+                <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
                   Admin
+                </span>
+              ) : projectRole && (
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                  projectRole === 'ProjectAdmin'
+                    ? 'bg-indigo-100 text-indigo-700'
+                    : projectRole === 'Editor'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-600'
+                }`}>
+                  {projectRole === 'ProjectAdmin' ? 'Project Admin' : projectRole}
                 </span>
               )}
             </span>
