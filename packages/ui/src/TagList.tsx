@@ -79,7 +79,7 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
         .eq('project_id', projectId)
         .ilike('tag_number', `%${q}%`)
         .order('tag_number')
-        .limit(200);
+        .limit(2000);
 
       if (tagError) {
         setQueryError(`Query error: ${tagError.message} (project_id: ${projectId})`);
@@ -109,7 +109,7 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
         .in('tag_id', tagIds)
         .order('tag_id')
         .order('document_number')
-        .limit(500);
+        .limit(5000);
 
       const docs = (docData ?? []) as unknown as Array<{
         document_id: number;
@@ -142,12 +142,12 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
         .schema('iss')
         .from('document')
         .select(
-          'document_id, document_number, sheet_number, tag_id, revision_number, minor_revision, tag:tag_id(tag_number), template:template_id(template_code, template_name)',
+          'document_id, document_number, sheet_number, tag_id, revision_number, minor_revision, template:template_id(template_code, template_name)',
         )
         .eq('project_id', projectId)
         .ilike('document_number', `%${q}%`)
         .order('document_number')
-        .limit(500);
+        .limit(2000);
 
       if (docError) {
         setQueryError(`Query error: ${docError.message} (project_id: ${projectId})`);
@@ -162,16 +162,25 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
         tag_id: number;
         revision_number: string | null;
         minor_revision: string | null;
-        tag: { tag_number: string } | null;
         template: { template_code: string; template_name: string | null } | null;
       }>;
+
+      const tagIds = [...new Set(docs.map((d) => d.tag_id))];
+      const { data: tagData } = await supabase
+        .from('tag')
+        .select('tag_id, tag_number')
+        .in('tag_id', tagIds);
+      const tagMap: Record<number, string> = Object.fromEntries(
+        ((tagData ?? []) as Array<{ tag_id: number; tag_number: string }>).map((t) => [t.tag_id, t.tag_number]),
+      );
+
       const docIds = docs.map((d) => d.document_id);
       const itemMap = await fetchItemValues(supabase, projectId, docIds);
 
       setResults(
         docs.map((d) => ({
           tag_id: d.tag_id,
-          tag_number: d.tag?.tag_number ?? '-',
+          tag_number: tagMap[d.tag_id] ?? '-',
           document_id: d.document_id,
           document_number: d.document_number,
           sheet_number: d.sheet_number,
@@ -187,13 +196,13 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
         .schema('iss')
         .from('document_value')
         .select(
-          'document_id, value_text, field_def!inner(field_name), document!inner(document_number, sheet_number, tag_id, revision_number, minor_revision, tag:tag_id(tag_number), template:template_id(template_code, template_name))',
+          'document_id, value_text, field_def!inner(field_name), document!inner(document_number, sheet_number, tag_id, revision_number, minor_revision, template:template_id(template_code, template_name))',
         )
         .eq('project_id', projectId)
         .ilike('value_text', `%${q}%`)
         .ilike('field_def.field_name', '%item%')
         .order('document_id')
-        .limit(500);
+        .limit(2000);
 
       if (itemError) {
         setQueryError(`Query error: ${itemError.message} (project_id: ${projectId})`);
@@ -210,15 +219,23 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
           tag_id: number;
           revision_number: string | null;
           minor_revision: string | null;
-          tag: { tag_number: string } | null;
           template: { template_code: string; template_name: string | null } | null;
         } | null;
       }>;
 
+      const tagIds = [...new Set(rows.map((r) => r.document?.tag_id).filter((id): id is number => id != null))];
+      const { data: tagData } = await supabase
+        .from('tag')
+        .select('tag_id, tag_number')
+        .in('tag_id', tagIds);
+      const tagMap: Record<number, string> = Object.fromEntries(
+        ((tagData ?? []) as Array<{ tag_id: number; tag_number: string }>).map((t) => [t.tag_id, t.tag_number]),
+      );
+
       setResults(
         rows.map((dv) => ({
           tag_id: dv.document?.tag_id ?? 0,
-          tag_number: dv.document?.tag?.tag_number ?? '-',
+          tag_number: tagMap[dv.document?.tag_id ?? 0] ?? '-',
           document_id: dv.document_id,
           document_number: dv.document?.document_number ?? '',
           sheet_number: dv.document?.sheet_number,
@@ -240,8 +257,19 @@ export function TagList({ projectId, tagDetailHref }: TagListProps) {
 
   const hrefFor = tagDetailHref ?? ((tagId: number) => `/dashboard/${tagId}`);
 
+  const tagCount = new Set(results.map((r) => r.tag_id)).size;
+  const docCount = results.filter((r) => r.document_id != null).length;
+
   return (
     <div>
+      <div className="flex items-center gap-3 mb-4">
+        <h1 className="text-2xl font-bold">Tags</h1>
+        {searched && !loading && results.length > 0 && (
+          <span className="text-sm text-gray-500">
+            {tagCount} tags · {docCount} documents
+          </span>
+        )}
+      </div>
       <div className="flex flex-wrap gap-2 mb-4">
         <select
           value={mode}
@@ -388,9 +416,6 @@ function ResultTable({
           ))}
         </tbody>
       </table>
-      <div className="px-4 py-2 bg-gray-50 text-xs text-gray-500">
-        {groups.length} tags ({results.length} documents)
-      </div>
     </div>
   );
 }
