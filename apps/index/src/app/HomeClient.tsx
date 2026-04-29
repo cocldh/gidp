@@ -71,6 +71,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [showAddTag, setShowAddTag] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveReason, setSaveReason] = useState("");
+  const [showExportConfirm, setShowExportConfirm] = useState(false);
 
   const [showAddColumnInput, setShowAddColumnInput] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
@@ -976,7 +977,7 @@ function HomeContent({ projectId }: { projectId: number }) {
           )}
 
           <button
-            onClick={exportExcel}
+            onClick={() => setShowExportConfirm(true)}
             disabled={isStreaming || rowData.length === 0}
             title={isStreaming ? "데이터 로딩 중 — 완료 후 내보내기 가능" : undefined}
             className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
@@ -1051,6 +1052,34 @@ function HomeContent({ projectId }: { projectId: number }) {
           !loading && <div className="w-full h-full flex items-center justify-center text-gray-400">No data available</div>
         )}
       </div>
+
+      {showExportConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 w-80 flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <Download size={20} className="text-emerald-500 shrink-0" />
+              <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Excel 내보내기</h2>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-slate-300">
+              현재 표시된 <span className="font-medium text-gray-900 dark:text-slate-100">{displayRowCount.toLocaleString()}</span>개 행을 Excel 파일로 내보냅니다.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowExportConfirm(false)}
+                className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => { setShowExportConfirm(false); exportExcel(); }}
+                className="px-4 py-2 text-sm rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
+              >
+                내보내기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <UploadModal
         open={showUpload}
