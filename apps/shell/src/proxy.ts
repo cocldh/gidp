@@ -3,6 +3,7 @@ import { createAuthMiddleware } from '@gidp/auth/middleware';
 export const proxy = createAuthMiddleware({
   loginPath: '/login',
   postLoginPath: '/project',
+  extraPublicPaths: ['/reset-password'],
 });
 
 export const config = {
