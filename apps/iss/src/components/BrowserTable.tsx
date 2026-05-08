@@ -347,6 +347,7 @@ export default function BrowserTable() {
       pendingEdits.current.set(key, normalizedNew)
     }
     setPendingCount(pendingEdits.current.size)
+    gridApiRef.current?.refreshCells({ rowNodes: [event.node], columns: [fieldName], force: true })
   }, [])
 
   const handleSave = async () => {
