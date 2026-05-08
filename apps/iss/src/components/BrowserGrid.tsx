@@ -320,7 +320,11 @@ export default function BrowserGrid({
         rowData={rowData}
         columnDefs={columnDefs}
         defaultColDef={defaultColDef}
-        onGridReady={e => { gridApiRef.current = e.api; onGridReady(e.api) }}
+        onGridReady={e => {
+          gridApiRef.current = e.api
+          e.api.addEventListener('undoCellEditing', onCellValueChanged)
+          onGridReady(e.api)
+        }}
         onCellValueChanged={onCellValueChanged}
         onCellFocused={onCellFocused}
         onCellMouseDown={onCellMouseDown}
