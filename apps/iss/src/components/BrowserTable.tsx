@@ -66,6 +66,7 @@ export default function BrowserTable() {
 
   const pendingEdits = useRef<Map<EditKey, string | null>>(new Map())
   const originalValues = useRef<Map<EditKey, string | null>>(new Map())
+  const undoStack = useRef<Array<{ docId: number; fieldName: string; oldValue: string | null }>>([])
   const [pendingCount, setPendingCount] = useState(0)
   const loadIdRef = useRef(0)
 
@@ -129,7 +130,7 @@ export default function BrowserTable() {
   const captureOriginals = (rows: BrowserRow[]) => {
     for (const row of rows) {
       for (const [fieldName, value] of Object.entries(row.field_values)) {
-        originalValues.current.set(makeKey(row.document_id, fieldName), value ?? null)
+        originalValues.current.set(makeKey(row.document_id, fieldName), value === '' ? null : (value ?? null))
       }
     }
   }
@@ -177,7 +178,6 @@ export default function BrowserTable() {
     return enriched.map(col => ({
       field: col.field_name,
       headerName: col.field_name,
-      editable: canEdit,
       width: 150, minWidth: 80,
       cellEditor: col.field_name.toLowerCase().includes('note') ? 'agLargeTextCellEditor' : 'agTextCellEditor',
       cellEditorPopup: col.field_name.toLowerCase().includes('note'),
@@ -197,6 +197,7 @@ export default function BrowserTable() {
     setTotalCount(0)
     pendingEdits.current.clear()
     originalValues.current.clear()
+    undoStack.current = []
     setPendingCount(0)
 
     const templateCode = selectedTemplate
@@ -339,7 +340,9 @@ export default function BrowserTable() {
     if (oldValue === newValue) return
     const docId = data._doc_id as number
     const key = makeKey(docId, fieldName)
+    const normalizedOld = oldValue === '' ? null : (oldValue as string | null)
     const normalizedNew = newValue === '' ? null : (newValue as string | null)
+    undoStack.current.push({ docId, fieldName, oldValue: normalizedOld })
     const original = originalValues.current.get(key) ?? null
     if (normalizedNew === original) {
       pendingEdits.current.delete(key)
@@ -350,24 +353,38 @@ export default function BrowserTable() {
     gridApiRef.current?.refreshCells({ rowNodes: [event.node], columns: [fieldName], force: true })
   }, [])
 
-  const onUndoCellEditing = useCallback((event: any) => {
-    const fieldName = event.colDef?.field as string
-    if (!fieldName || NON_EDITABLE_FIELDS.has(fieldName)) return
-    const docId = event.data?._doc_id as number
-    if (!docId) return
-    const key = makeKey(docId, fieldName)
-    // oldValue/newValue가 undo 이벤트에서 undefined일 수 있으므로 data에서 직접 읽음
-    const currentValue = event.data?.[fieldName]
-    const normalizedCurrent = currentValue === '' ? null : (currentValue ?? null)
+  const handleUndo = useCallback(() => {
+    const entry = undoStack.current.pop()
+    if (!entry) return
+    const api = gridApiRef.current
+    if (!api) return
+    let targetNode: any = null
+    api.forEachNode(node => { if (node.data?._doc_id === entry.docId) targetNode = node })
+    if (!targetNode) return
+    const key = makeKey(entry.docId, entry.fieldName)
     const original = originalValues.current.get(key) ?? null
-    if (normalizedCurrent === original) {
+    if (entry.oldValue === original) {
       pendingEdits.current.delete(key)
     } else {
-      pendingEdits.current.set(key, normalizedCurrent as string | null)
+      pendingEdits.current.set(key, entry.oldValue)
     }
     setPendingCount(pendingEdits.current.size)
-    gridApiRef.current?.refreshCells({ rowNodes: [event.node], columns: [fieldName], force: true })
+    targetNode.setData({ ...targetNode.data, [entry.fieldName]: entry.oldValue })
+    api.refreshCells({ rowNodes: [targetNode], columns: [entry.fieldName], force: true })
   }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== 'z' || e.shiftKey) return
+      const tag = (document.activeElement?.tagName ?? '').toUpperCase()
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (undoStack.current.length === 0) return
+      e.preventDefault()
+      handleUndo()
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [handleUndo])
 
   const handleSave = async () => {
     if (pendingEdits.current.size === 0) return
@@ -536,6 +553,7 @@ export default function BrowserTable() {
 
     setMessage(`Saved ${upserts.length} cell(s) — Minor Revision 자동 커밋`)
     pendingEdits.current.clear()
+    undoStack.current = []
     setPendingCount(0)
     gridApiRef.current?.refreshCells({ force: true })
     setSaving(false)
@@ -917,7 +935,6 @@ export default function BrowserTable() {
           pendingEditsRef={pendingEdits}
           onGridReady={api => { gridApiRef.current = api }}
           onCellValueChanged={onCellValueChanged}
-          onUndoCellEditing={onUndoCellEditing}
         />
       )}
     </div>
