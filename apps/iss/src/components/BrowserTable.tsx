@@ -18,9 +18,24 @@ type EditKey = string
 const makeKey = (docId: number, fieldName: string): EditKey => `${docId}__${fieldName}`
 
 const NON_EDITABLE_FIELDS = new Set([
-  '_doc_id', '_tag_id', '_select',
+  '_doc_id', '_tag_id', '_select', '_minor_revision', '_revision_number',
   'tag_number', 'document_number', 'template_code', 'sheet_number', 'revision',
 ])
+
+function nextMinorRevision(current: string | null): string {
+  if (!current) return 'a'
+  const chars = current.split('')
+  let i = chars.length - 1
+  while (i >= 0) {
+    if (chars[i] < 'z') {
+      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1)
+      return chars.join('')
+    }
+    chars[i] = 'a'
+    i--
+  }
+  return 'a'.repeat(chars.length + 1)
+}
 
 export default function BrowserTable() {
   const supabase = createClient()
@@ -50,6 +65,7 @@ export default function BrowserTable() {
   const PAGE_SIZE_OPTIONS = [50, 100, 200, 500]
 
   const pendingEdits = useRef<Map<EditKey, string | null>>(new Map())
+  const originalValues = useRef<Map<EditKey, string | null>>(new Map())
   const [pendingCount, setPendingCount] = useState(0)
   const loadIdRef = useRef(0)
 
@@ -110,9 +126,19 @@ export default function BrowserTable() {
     { field: 'revision', headerName: 'Rev', editable: false, width: 70, minWidth: 50 },
   ]
 
+  const captureOriginals = (rows: BrowserRow[]) => {
+    for (const row of rows) {
+      for (const [fieldName, value] of Object.entries(row.field_values)) {
+        originalValues.current.set(makeKey(row.document_id, fieldName), value ?? null)
+      }
+    }
+  }
+
   const flattenRows = (rows: BrowserRow[]) => rows.map(row => ({
     _doc_id: row.document_id,
     _tag_id: row.tag_id,
+    _minor_revision: row.minor_revision,
+    _revision_number: row.revision_number,
     tag_number: row.tag_number,
     document_number: row.document_number,
     template_code: row.template_code,
@@ -170,6 +196,7 @@ export default function BrowserTable() {
     setIsStreaming(false)
     setTotalCount(0)
     pendingEdits.current.clear()
+    originalValues.current.clear()
     setPendingCount(0)
 
     const templateCode = selectedTemplate
@@ -219,7 +246,9 @@ export default function BrowserTable() {
 
       if (loadId !== loadIdRef.current) return
 
-      const firstRows = flattenRows((firstData ?? []) as BrowserRow[])
+      const firstData_ = (firstData ?? []) as BrowserRow[]
+      captureOriginals(firstData_)
+      const firstRows = flattenRows(firstData_)
       const changedFirst = await fetchChangedCells(firstRows.map(r => r._doc_id as number), fieldCols)
       if (loadId !== loadIdRef.current) return
 
@@ -248,6 +277,7 @@ export default function BrowserTable() {
           const moreRows = (chunk ?? []) as BrowserRow[]
           if (moreRows.length === 0) break
 
+          captureOriginals(moreRows)
           const flat = flattenRows(moreRows)
           const changedChunk = await fetchChangedCells(flat.map(r => r._doc_id as number), fieldCols)
           if (loadId !== loadIdRef.current) return
@@ -285,6 +315,7 @@ export default function BrowserTable() {
       if (loadId !== loadIdRef.current) return
       changedSetRef.current = changedCells
 
+      captureOriginals(displayRows)
       setRowData(flattenRows(displayRows))
       setColumnDefs([...buildFixedCols(), ...buildDynCols(fieldCols, customOrderRes)])
     } else {
@@ -307,7 +338,14 @@ export default function BrowserTable() {
     if (NON_EDITABLE_FIELDS.has(fieldName)) return
     if (oldValue === newValue) return
     const docId = data._doc_id as number
-    pendingEdits.current.set(makeKey(docId, fieldName), newValue === '' ? null : (newValue as string))
+    const key = makeKey(docId, fieldName)
+    const normalizedNew = newValue === '' ? null : (newValue as string | null)
+    const original = originalValues.current.get(key) ?? null
+    if (normalizedNew === original) {
+      pendingEdits.current.delete(key)
+    } else {
+      pendingEdits.current.set(key, normalizedNew)
+    }
     setPendingCount(pendingEdits.current.size)
   }, [])
 
@@ -316,6 +354,7 @@ export default function BrowserTable() {
     setSaving(true)
     setMessage('')
 
+    // field_name → field_id 매핑
     const fieldNames = Array.from(new Set(
       Array.from(pendingEdits.current.keys()).map(k => k.split('__')[1])
     ))
@@ -325,25 +364,160 @@ export default function BrowserTable() {
       .in('field_name', fieldNames)
     const nameToId = new Map((fieldRows ?? []).map((r: any) => [r.field_name, r.field_id]))
 
-    const upserts = Array.from(pendingEdits.current.entries()).flatMap(([key, value]) => {
+    // document별 변경사항 그룹핑
+    const byDoc = new Map<number, Array<{ fieldName: string; fieldId: number; newValue: string | null }>>()
+    for (const [key, value] of pendingEdits.current.entries()) {
       const [docIdStr, fieldName] = key.split('__')
       const fieldId = nameToId.get(fieldName)
-      if (!fieldId) return []
-      return [{ document_id: parseInt(docIdStr), field_id: fieldId, value_text: value }]
-    })
+      if (!fieldId) continue
+      const docId = parseInt(docIdStr)
+      if (!byDoc.has(docId)) byDoc.set(docId, [])
+      byDoc.get(docId)!.push({ fieldName, fieldId, newValue: value })
+    }
 
+    const docIds = Array.from(byDoc.keys())
+
+    // 저장 전 이전 값 스냅샷 (변경 감지용)
+    const { data: prevValRows } = await iss
+      .from('document_value')
+      .select('document_id, field_id, value_text')
+      .in('document_id', docIds)
+    const prevMap = new Map<string, string | null>()
+    for (const pv of (prevValRows ?? []) as Array<{ document_id: number; field_id: number; value_text: string | null }>) {
+      prevMap.set(`${pv.document_id}__${pv.field_id}`, pv.value_text ?? null)
+    }
+
+    // document_value upsert
+    const upserts = Array.from(byDoc.entries()).flatMap(([docId, changes]) =>
+      changes.map(c => ({ document_id: docId, field_id: c.fieldId, value_text: c.newValue }))
+    )
     const { error } = await iss
       .from('document_value')
       .upsert(upserts, { onConflict: 'document_id,field_id' })
 
     if (error) {
       setMessage(`Error: ${error.message}`)
-    } else {
-      setMessage(`Saved ${upserts.length} cell(s)`)
-      pendingEdits.current.clear()
-      setPendingCount(0)
-      gridApiRef.current?.refreshCells({ force: true })
+      setSaving(false)
+      return
     }
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const committedBy = user?.email ?? null
+
+    // 각 document별 revision 처리
+    for (const [docId, changes] of byDoc.entries()) {
+      const actualChanges = changes
+        .map(c => ({
+          ...c,
+          previousValue: prevMap.get(`${docId}__${c.fieldId}`) ?? null,
+        }))
+        .filter(c => c.previousValue !== c.newValue)
+
+      if (actualChanges.length === 0) continue
+
+      const rowNode = rowData.find(r => (r as any)._doc_id === docId) as any
+      const currentMinorRevision = (rowNode?._minor_revision as string | null) ?? null
+      const currentRevNumber = (rowNode?._revision_number as string | null) ?? null
+      const tagNumber = (rowNode?.tag_number as string | null) ?? null
+      const documentNumber = (rowNode?.document_number as string | null) ?? null
+
+      const newMinor = nextMinorRevision(currentMinorRevision)
+      const displayRev = (currentRevNumber ?? '') + newMinor
+
+      await iss.from('document').update({ minor_revision: newMinor }).eq('document_id', docId)
+
+      const { data: revData } = await iss
+        .from('document_revision')
+        .insert({
+          document_id: docId,
+          revision_number: displayRev,
+          revision_type: 'minor',
+          note: null,
+          committed_by: committedBy,
+        })
+        .select('revision_id, committed_at')
+        .single()
+
+      const revisionId = (revData as any)?.revision_id as number | null
+      const revCommittedAt = (revData as any)?.committed_at as string | null ?? new Date().toISOString()
+
+      if (revisionId) {
+        const details = actualChanges.map(c => ({
+          revision_id: revisionId,
+          document_number: documentNumber ?? '',
+          tag_number: tagNumber,
+          field_name: c.fieldName,
+          previous_value: c.previousValue,
+          new_value: c.newValue,
+          changed_at: revCommittedAt,
+          changed_by: committedBy,
+        }))
+        await iss.from('document_revision_detail').insert(details)
+      }
+
+      if (!currentMinorRevision) {
+        let allSheetQuery = iss
+          .from('document')
+          .select('document_id')
+          .eq('document_number', documentNumber ?? '')
+        if (projectId != null) allSheetQuery = allSheetQuery.eq('project_id', projectId)
+        const { data: allSheetDocs } = await allSheetQuery
+        const allSheetIds = (allSheetDocs ?? []).map((d: any) => d.document_id as number)
+        if (allSheetIds.length > 0) {
+          await iss.from('document_value_change').delete().in('document_id', allSheetIds)
+        }
+        const dvcInserts = actualChanges.map(c => ({
+          document_id: docId,
+          field_id: c.fieldId,
+          field_name: c.fieldName,
+          previous_value: c.previousValue,
+          new_value: c.newValue,
+          tag_number: tagNumber,
+          changed_at: revCommittedAt,
+          changed_by: committedBy,
+        }))
+        if (dvcInserts.length > 0) {
+          await iss.from('document_value_change').upsert(dvcInserts, { onConflict: 'document_id,field_id' })
+        }
+      } else {
+        const { data: existingDvc } = await iss
+          .from('document_value_change')
+          .select('field_id, previous_value, new_value')
+          .eq('document_id', docId)
+        const existingDvcMap = new Map((existingDvc ?? []).map((e: any) => [e.field_id as number, e]))
+
+        const dvcUpserts = actualChanges.map(c => {
+          const existing = existingDvcMap.get(c.fieldId)
+          return {
+            document_id: docId,
+            field_id: c.fieldId,
+            field_name: c.fieldName,
+            previous_value: existing ? existing.previous_value : c.previousValue,
+            new_value: c.newValue,
+            tag_number: tagNumber,
+            changed_at: revCommittedAt,
+            changed_by: committedBy,
+          }
+        })
+
+        const revertedFieldIds = dvcUpserts
+          .filter(d => d.previous_value === d.new_value)
+          .map(d => d.field_id)
+        const toUpsert = dvcUpserts.filter(d => d.previous_value !== d.new_value)
+
+        for (const fid of revertedFieldIds) {
+          await iss.from('document_value_change').delete().eq('document_id', docId).eq('field_id', fid)
+        }
+        if (toUpsert.length > 0) {
+          await iss.from('document_value_change').upsert(toUpsert, { onConflict: 'document_id,field_id' })
+        }
+      }
+    }
+
+    setMessage(`Saved ${upserts.length} cell(s) — Minor Revision 자동 커밋`)
+    pendingEdits.current.clear()
+    setPendingCount(0)
+    gridApiRef.current?.refreshCells({ force: true })
     setSaving(false)
     setTimeout(() => setMessage(''), 3000)
   }

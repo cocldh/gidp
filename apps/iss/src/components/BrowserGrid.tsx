@@ -302,7 +302,7 @@ export default function BrowserGrid({
             return { backgroundColor: '#fde68a' }
           }
           if (changedSetRef.current.has(`${docId}__${field}`)) {
-            return { backgroundColor: '#fefce8' }
+            return { backgroundColor: '#fde68a' }
           }
         }
       }
@@ -330,7 +330,8 @@ export default function BrowserGrid({
         animateRows={false}
         suppressHorizontalScroll={false}
         alwaysShowVerticalScroll={true}
-        {...{ suppressUndoRedoCellEditing: true } as any}
+        undoRedoCellEditing={true}
+        undoRedoCellEditingLimit={50}
       />
     </div>
   )
