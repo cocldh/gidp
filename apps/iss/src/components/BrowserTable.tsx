@@ -350,6 +350,25 @@ export default function BrowserTable() {
     gridApiRef.current?.refreshCells({ rowNodes: [event.node], columns: [fieldName], force: true })
   }, [])
 
+  const onUndoCellEditing = useCallback((event: any) => {
+    const fieldName = event.colDef?.field as string
+    if (!fieldName || NON_EDITABLE_FIELDS.has(fieldName)) return
+    const docId = event.data?._doc_id as number
+    if (!docId) return
+    const key = makeKey(docId, fieldName)
+    // oldValue/newValue가 undo 이벤트에서 undefined일 수 있으므로 data에서 직접 읽음
+    const currentValue = event.data?.[fieldName]
+    const normalizedCurrent = currentValue === '' ? null : (currentValue ?? null)
+    const original = originalValues.current.get(key) ?? null
+    if (normalizedCurrent === original) {
+      pendingEdits.current.delete(key)
+    } else {
+      pendingEdits.current.set(key, normalizedCurrent as string | null)
+    }
+    setPendingCount(pendingEdits.current.size)
+    gridApiRef.current?.refreshCells({ rowNodes: [event.node], columns: [fieldName], force: true })
+  }, [])
+
   const handleSave = async () => {
     if (pendingEdits.current.size === 0) return
     setSaving(true)
@@ -898,6 +917,7 @@ export default function BrowserTable() {
           pendingEditsRef={pendingEdits}
           onGridReady={api => { gridApiRef.current = api }}
           onCellValueChanged={onCellValueChanged}
+          onUndoCellEditing={onUndoCellEditing}
         />
       )}
     </div>

@@ -15,6 +15,7 @@ interface BrowserGridProps {
   pendingEditsRef: React.MutableRefObject<Map<string, string | null>>
   onGridReady: (api: GridApi) => void
   onCellValueChanged: (event: any) => void
+  onUndoCellEditing: (event: any) => void
 }
 
 // ── 셀 다중 선택 헬퍼 ──────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ export default function BrowserGrid({
   pendingEditsRef,
   onGridReady,
   onCellValueChanged,
+  onUndoCellEditing,
 }: BrowserGridProps) {
   const gridApiRef = useRef<GridApi | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -322,7 +324,7 @@ export default function BrowserGrid({
         defaultColDef={defaultColDef}
         onGridReady={e => {
           gridApiRef.current = e.api
-          e.api.addEventListener('undoCellEditing', onCellValueChanged)
+          e.api.addEventListener('undoCellEditing', onUndoCellEditing)
           onGridReady(e.api)
         }}
         onCellValueChanged={onCellValueChanged}
