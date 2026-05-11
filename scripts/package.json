@@ -7,7 +7,9 @@
     "snapshot:iss": "tsx snapshot-iss-to-gidp.ts",
     "snapshot:iss:dry": "tsx snapshot-iss-to-gidp.ts --dry-run",
     "snapshot:iss:dump": "tsx snapshot-iss-to-gidp.ts --dump dump/iss-snapshot.jsonl",
-    "snapshot:iss:apply": "tsx snapshot-iss-to-gidp.ts --apply dump/iss-snapshot.jsonl"
+    "snapshot:iss:apply": "tsx snapshot-iss-to-gidp.ts --apply dump/iss-snapshot.jsonl",
+    "iis:upload-templates": "tsx upload-iis-templates.ts",
+    "iis:upload-templates:dry": "tsx upload-iis-templates.ts --dry-run"
   },
   "dependencies": {
     "pg": "^8.13.1",

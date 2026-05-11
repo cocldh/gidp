@@ -36,6 +36,7 @@ Thumbs.db
 
 # Sample / reference files
 *.pdf
+docs/samples/
 
 # Vercel
 .vercel
