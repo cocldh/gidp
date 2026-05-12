@@ -58,6 +58,9 @@ export default async function IisMappingPage() {
             <a href="/drawings/iis/classification" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
               Classification Rules
             </a>
+            <a href="/drawings/iis/generate" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
+              Generation
+            </a>
             <a href="/drawings/dashboard" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
               ← Drawings
             </a>

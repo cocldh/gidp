@@ -8,9 +8,10 @@ interface TemplateRow {
   description: string | null
 }
 
-interface InstrumentTypeRow {
-  instrument_type: string
+interface FunctionKeyRow {
+  function_key: string
   n: number
+  sample_instrument_type: string | null
 }
 
 type MatchKind = 'prefix' | 'regex'
@@ -39,7 +40,7 @@ interface DraftRule {
 interface Props {
   projectId: number
   templates: TemplateRow[]
-  instrumentTypes: InstrumentTypeRow[]
+  functionKeys: FunctionKeyRow[]
 }
 
 const UNCLASSIFIED = '__unclassified__'
@@ -68,8 +69,9 @@ function newDraft(template: string, priority: number): DraftRule {
   }
 }
 
-// Apply the rule list to an instrument_type, returning the matched template or null.
-function classify(instrumentType: string, rules: DraftRule[]): string | null {
+// Apply the rule list to a function_key, returning the matched template or null.
+// Mirrors the Postgres-side evaluation used by the generate route.
+function classify(functionKey: string, rules: DraftRule[]): string | null {
   const active = rules
     .filter((r) => !r._deleted && r.is_active && r.match_value.trim() !== '')
     .sort((a, b) => {
@@ -79,9 +81,9 @@ function classify(instrumentType: string, rules: DraftRule[]): string | null {
   for (const r of active) {
     try {
       if (r.match_kind === 'prefix') {
-        if (instrumentType.startsWith(r.match_value)) return r.template_code
+        if (functionKey.startsWith(r.match_value)) return r.template_code
       } else {
-        if (new RegExp(r.match_value).test(instrumentType)) return r.template_code
+        if (new RegExp(r.match_value).test(functionKey)) return r.template_code
       }
     } catch {
       // bad regex, skip silently in preview; save validation will catch it
@@ -90,7 +92,7 @@ function classify(instrumentType: string, rules: DraftRule[]): string | null {
   return null
 }
 
-export default function ClassificationEditor({ projectId, templates, instrumentTypes }: Props) {
+export default function ClassificationEditor({ projectId, templates, functionKeys }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [drafts, setDrafts] = useState<DraftRule[]>([])
   const [loading, setLoading] = useState(true)
@@ -136,20 +138,25 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
     [drafts],
   )
 
-  // Live classification preview from instrumentTypes + current draft rules.
+  // Live classification preview from functionKeys + current draft rules.
   const classification = useMemo(() => {
-    const byTemplate: Record<string, { tags: number; types: number }> = {}
-    const rowResults: { type: string; n: number; template: string | null }[] = []
-    for (const it of instrumentTypes) {
-      const tpl = classify(it.instrument_type, drafts)
+    const byTemplate: Record<string, { tags: number; keys: number }> = {}
+    const rowResults: { function_key: string; sample: string | null; n: number; template: string | null }[] = []
+    for (const fk of functionKeys) {
+      const tpl = classify(fk.function_key, drafts)
       const key = tpl ?? UNCLASSIFIED
-      byTemplate[key] = byTemplate[key] || { tags: 0, types: 0 }
-      byTemplate[key].tags += it.n
-      byTemplate[key].types += 1
-      rowResults.push({ type: it.instrument_type, n: it.n, template: tpl })
+      byTemplate[key] = byTemplate[key] || { tags: 0, keys: 0 }
+      byTemplate[key].tags += fk.n
+      byTemplate[key].keys += 1
+      rowResults.push({
+        function_key: fk.function_key,
+        sample: fk.sample_instrument_type,
+        n: fk.n,
+        template: tpl,
+      })
     }
     return { byTemplate, rowResults }
-  }, [drafts, instrumentTypes])
+  }, [drafts, functionKeys])
 
   const filteredPreview = useMemo(() => {
     const q = previewSearch.trim().toLowerCase()
@@ -159,7 +166,13 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
         if (previewFilter === UNCLASSIFIED) return r.template === null
         return r.template === previewFilter
       })
-      .filter((r) => q === '' || r.type.toLowerCase().includes(q))
+      .filter((r) => {
+        if (q === '') return true
+        return (
+          r.function_key.toLowerCase().includes(q) ||
+          (r.sample ?? '').toLowerCase().includes(q)
+        )
+      })
   }, [classification.rowResults, previewFilter, previewSearch])
 
   function updateDraft(draftId: string, patch: Partial<DraftRule>) {
@@ -291,7 +304,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
               <tr>
                 <th className="px-2 py-2 text-left w-16">Prio</th>
                 <th className="px-2 py-2 text-left w-20">Kind</th>
-                <th className="px-2 py-2 text-left">Match value</th>
+                <th className="px-2 py-2 text-left">Match value (function key)</th>
                 <th className="px-2 py-2 text-left w-28">Template</th>
                 <th className="px-2 py-2 text-center w-12">On</th>
                 <th className="px-2 py-2 text-right w-12"></th>
@@ -326,7 +339,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
                       type="text"
                       value={d.match_value}
                       onChange={(e) => updateDraft(d.draftId, { match_value: e.target.value })}
-                      placeholder={d.match_kind === 'prefix' ? 'PRESSURE …' : '^[A-Z]+-\\d+'}
+                      placeholder={d.match_kind === 'prefix' ? 'PT, PSV …' : '^P[A-Z]*$'}
                       className="w-full px-2 py-1 border border-gray-200 rounded font-mono text-sm"
                     />
                   </td>
@@ -372,7 +385,9 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
           </table>
         </div>
         <p className="mt-2 text-xs text-gray-400">
-          prefix는 instrument_type 의 시작 부분, regex는 instrument_type 전체에 적용됩니다. 같은 priority 면 더 긴 match_value 가 먼저 적용됩니다.
+          매칭 대상은 tag number 의 <code className="font-mono">function key</code> (예:{' '}
+          <code className="font-mono">D44-403-PT-3005</code> → <code className="font-mono">PT</code>) 입니다.
+          prefix 는 function key 의 시작 부분, regex 는 function key 전체에 적용. 같은 priority 면 더 긴 match_value 가 먼저 적용됩니다.
         </p>
       </section>
 
@@ -400,7 +415,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
                 <div className="mt-1 text-xs text-gray-700">
                   <span className="font-medium">{stat?.tags ?? 0}</span> tags
                   <span className="mx-1 text-gray-300">·</span>
-                  <span>{stat?.types ?? 0} types</span>
+                  <span>{stat?.keys ?? 0} keys</span>
                 </div>
               </button>
             )
@@ -416,7 +431,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
               <div className="text-xs text-gray-700 mt-1">
                 <span className="font-medium">{classification.byTemplate[UNCLASSIFIED].tags}</span> tags
                 <span className="mx-1 text-gray-300">·</span>
-                <span>{classification.byTemplate[UNCLASSIFIED].types} types</span>
+                <span>{classification.byTemplate[UNCLASSIFIED].keys} keys</span>
               </div>
             </button>
           )}
@@ -428,7 +443,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
             type="text"
             value={previewSearch}
             onChange={(e) => setPreviewSearch(e.target.value)}
-            placeholder="search instrument_type…"
+            placeholder="search function_key or instrument type…"
             className="flex-1 px-3 py-1.5 border border-gray-200 rounded text-sm"
           />
           <select
@@ -451,15 +466,17 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-500 sticky top-0">
               <tr>
-                <th className="px-3 py-2 text-left">Instrument type</th>
+                <th className="px-3 py-2 text-left w-24">Function key</th>
+                <th className="px-3 py-2 text-left">Sample instrument type</th>
                 <th className="px-3 py-2 text-right w-16">Tags</th>
                 <th className="px-3 py-2 text-left w-28">Template</th>
               </tr>
             </thead>
             <tbody>
               {filteredPreview.map((r) => (
-                <tr key={r.type} className="border-t border-gray-100">
-                  <td className="px-3 py-1.5 font-mono text-xs">{r.type}</td>
+                <tr key={r.function_key} className="border-t border-gray-100">
+                  <td className="px-3 py-1.5 font-mono text-xs">{r.function_key}</td>
+                  <td className="px-3 py-1.5 text-xs text-gray-500 truncate max-w-[20ch]">{r.sample ?? ''}</td>
                   <td className="px-3 py-1.5 text-right text-gray-700">{r.n}</td>
                   <td className="px-3 py-1.5">
                     {r.template ? (
@@ -472,7 +489,7 @@ export default function ClassificationEditor({ projectId, templates, instrumentT
               ))}
               {filteredPreview.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="px-3 py-6 text-center text-gray-400 text-sm">No matches.</td>
+                  <td colSpan={4} className="px-3 py-6 text-center text-gray-400 text-sm">No matches.</td>
                 </tr>
               )}
             </tbody>

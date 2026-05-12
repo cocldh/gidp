@@ -59,7 +59,7 @@ export default async function DashboardPage() {
           <div className="mt-4 flex flex-wrap gap-3">
             <a
               href="/drawings/iis/mapping"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[#000080] text-white rounded text-sm hover:bg-[#000060]"
+              className="inline-flex items-center gap-2 px-4 py-2 border border-[#000080] text-[#000080] rounded text-sm hover:bg-[#000080]/5"
             >
               IIS Column Mapping →
             </a>
@@ -68,6 +68,12 @@ export default async function DashboardPage() {
               className="inline-flex items-center gap-2 px-4 py-2 border border-[#000080] text-[#000080] rounded text-sm hover:bg-[#000080]/5"
             >
               IIS Classification Rules →
+            </a>
+            <a
+              href="/drawings/iis/generate"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#000080] text-white rounded text-sm hover:bg-[#000060]"
+            >
+              IIS Generation →
             </a>
           </div>
         </div>
