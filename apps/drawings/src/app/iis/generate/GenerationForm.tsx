@@ -74,6 +74,7 @@ export default function GenerationForm({ templates }: Props) {
       const unclassified = res.headers.get('X-IIS-Unclassified')
       const overflowed = res.headers.get('X-IIS-Overflowed') === '1'
       const usedTemplates = res.headers.get('X-IIS-Templates')
+      const headerStamps = res.headers.get('X-IIS-Header-Stamps')
 
       // Filename from Content-Disposition
       const disp = res.headers.get('Content-Disposition') ?? ''
@@ -109,6 +110,7 @@ export default function GenerationForm({ templates }: Props) {
       if (unclassified) parts.push(`unclassified=${unclassified}`)
       if (usedTemplates) parts.push(`templates=${usedTemplates}`)
       if (overflowed) parts.push('OVERFLOWED — some pages exceeded data_row range')
+      if (headerStamps) parts.push(`header[${headerStamps}]`)
       setInfo(parts.join(' · '))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -171,7 +173,7 @@ export default function GenerationForm({ templates }: Props) {
             </select>
           </label>
           <label className="text-sm">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Revision (rev_no_cells)</div>
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Revision No.</div>
             <input
               type="text"
               value={revNo}
@@ -181,7 +183,7 @@ export default function GenerationForm({ templates }: Props) {
             />
           </label>
           <label className="text-sm">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Document no (doc_no_cell)</div>
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Document No. (DCC No.)</div>
             <input
               type="text"
               value={docNo}
@@ -192,7 +194,10 @@ export default function GenerationForm({ templates }: Props) {
           </label>
         </div>
         <p className="mt-3 text-xs text-gray-400">
-          Rev / Doc 은 비워두면 해당 셀을 건드리지 않습니다. Auto 모드에서는 모든 템플릿에 동일하게 stamp 됨.
+          <code className="font-mono">SHEET_NUMBER</code> (페이지별 001/002/...) ·
+          {' '}<code className="font-mono">REV_NUMBER</code> ·
+          {' '}<code className="font-mono">DCC_NO</code>
+          {' '}를 Excel <strong>이름 정의 (Name Box)</strong> 로 셀에 지정해 두거나 셀 텍스트로 직접 적어두면 해당 위치에 stamp 됩니다. REV_NUMBER 는 부분 일치 — <code className="font-mono">REV_NUMBER1</code>, <code className="font-mono">RV_REV_NUMBER</code> 처럼 그 문자열을 포함하는 모든 이름에 모두 찍힘. DB 의 page_no_cell / rev_no_cells / doc_no_cell 매핑도 그대로 사용. Rev/Doc 은 비워두면 건드리지 않습니다.
         </p>
       </section>
 

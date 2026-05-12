@@ -145,9 +145,60 @@ function writeTextCell(idx: SheetIndex, cellRef: string, value: string): void {
 
   const isElem = doc.createElementNS(ns, 'is')
   const tElem = doc.createElementNS(ns, 't')
+  // Preserve leading/trailing whitespace so user-supplied rev/doc with spaces
+  // (e.g. " 0 ") survive round-trip — without this Excel collapses them.
+  tElem.setAttribute('xml:space', 'preserve')
   tElem.textContent = value
   isElem.appendChild(tElem)
   targetCell.appendChild(isElem)
+}
+
+// ---------------------------------------------------------------------------
+// Merged-cell handling
+// ---------------------------------------------------------------------------
+
+interface MergeRange {
+  anchor: string         // top-left cellRef, e.g. "DD59"
+  cells: Set<string>     // every cellRef covered by the merge
+}
+
+// Parse all <mergeCell ref="A1:B2"/> entries in the sheet. We need to know
+// these because writing a value into a merge area's non-anchor cell is invalid
+// per OOXML — Excel surfaces "We found a problem with some content. Do you
+// want us to try to recover…" on open.
+function loadMergeRanges(sheetDoc: Document): MergeRange[] {
+  const out: MergeRange[] = []
+  for (const mc of getElementsByTagNameLocal(sheetDoc, 'mergeCell')) {
+    const ref = mc.getAttribute('ref')
+    if (!ref) continue
+    const [aRef, bRef] = ref.split(':')
+    if (!aRef || !bRef) continue
+    const a = parseCellRef(aRef.toUpperCase())
+    const b = parseCellRef(bRef.toUpperCase())
+    if (!a || !b) continue
+    const minCol = Math.min(a.col, b.col)
+    const maxCol = Math.max(a.col, b.col)
+    const minRow = Math.min(a.row, b.row)
+    const maxRow = Math.max(a.row, b.row)
+    const anchor = `${colLetterFromIdx(minCol)}${minRow}`
+    const cells = new Set<string>()
+    for (let r = minRow; r <= maxRow; r++) {
+      for (let c = minCol; c <= maxCol; c++) {
+        cells.add(`${colLetterFromIdx(c)}${r}`)
+      }
+    }
+    out.push({ anchor, cells })
+  }
+  return out
+}
+
+// If cellRef sits inside a merged range, return the anchor; otherwise return
+// the original ref. Linear scan is fine — Aramco templates have ~10 merges.
+function redirectToAnchor(cellRef: string, ranges: MergeRange[]): string {
+  for (const r of ranges) {
+    if (r.cells.has(cellRef)) return r.anchor
+  }
+  return cellRef
 }
 
 // ---------------------------------------------------------------------------
@@ -409,16 +460,284 @@ async function fetchIssValueMap(
 // Stamping helpers (work on a parsed sheet DOM)
 // ---------------------------------------------------------------------------
 
-function stampHeaderCells(idx: SheetIndex, L: LayoutRow, pageLabel: string | null, body: GenerateBody) {
-  if (L.page_no_cell && pageLabel != null) {
-    writeTextCell(idx, L.page_no_cell, pageLabel)
+// Read xl/sharedStrings.xml as a flat array indexed by <si> position.
+// A <si> can contain a single <t> or several <r><t> rich-text runs — we
+// concatenate the text content so the final string matches what Excel renders.
+async function loadSharedStrings(zip: JSZip): Promise<string[]> {
+  const file = zip.file('xl/sharedStrings.xml')
+  if (!file) return []
+  const xml = await file.async('string')
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  const out: string[] = []
+  for (const si of getElementsByTagNameLocal(doc, 'si')) {
+    const tNodes = getElementsByTagNameLocal(si, 't')
+    out.push(tNodes.map(t => t.textContent ?? '').join(''))
   }
-  if (body.rev_no != null && body.rev_no !== '' && L.rev_no_cells) {
-    for (const cell of L.rev_no_cells) writeTextCell(idx, cell, body.rev_no)
+  return out
+}
+
+// Resolve the visible text of a cell. Handles t="s" (shared), t="inlineStr",
+// and t="str" / untyped (formula result or raw string in <v>).
+function getCellText(cell: Element, sharedStrings: string[]): string | null {
+  const t = cell.getAttribute('t')
+  if (t === 's') {
+    const vEl = getElementsByTagNameLocal(cell, 'v')[0]
+    if (!vEl) return null
+    const sIdx = parseInt(vEl.textContent ?? '')
+    if (Number.isNaN(sIdx) || sIdx < 0 || sIdx >= sharedStrings.length) return null
+    return sharedStrings[sIdx]
   }
-  if (body.doc_no != null && body.doc_no !== '' && L.doc_no_cell) {
-    writeTextCell(idx, L.doc_no_cell, body.doc_no)
+  if (t === 'inlineStr') {
+    const isEl = getElementsByTagNameLocal(cell, 'is')[0]
+    if (!isEl) return null
+    return getElementsByTagNameLocal(isEl, 't').map(te => te.textContent ?? '').join('')
   }
+  if (t === 'str' || t == null) {
+    const vEl = getElementsByTagNameLocal(cell, 'v')[0]
+    return vEl ? (vEl.textContent ?? null) : null
+  }
+  return null
+}
+
+type MatchMode = 'exact' | 'contains'
+
+// Scan all cells in the sheet for ones whose trimmed text matches any of the
+// given placeholder strings. Each placeholder picks its own match mode:
+//   - 'exact'    — cell text == placeholder
+//   - 'contains' — placeholder appears anywhere in cell text
+// Returns Map<placeholder, cellRef[]>.
+function findPlaceholderCells(
+  idx: SheetIndex,
+  sharedStrings: string[],
+  modes: Map<string, MatchMode>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  if (modes.size === 0) return out
+  for (const [, cellMap] of idx.cellMaps) {
+    for (const [cellRef, cell] of cellMap) {
+      const text = getCellText(cell, sharedStrings)
+      if (text == null) continue
+      const key = text.trim()
+      for (const [placeholder, mode] of modes) {
+        const hit = mode === 'exact' ? key === placeholder : key.includes(placeholder)
+        if (!hit) continue
+        const arr = out.get(placeholder) ?? []
+        arr.push(cellRef)
+        out.set(placeholder, arr)
+      }
+    }
+  }
+  return out
+}
+
+// Parse a definedName ref like "Sheet1!$A$1", "'My Sheet'!$A$1", or
+// "Sheet1!$A$1:$B$2" (range). Returns the sheet name (null if workbook-scoped
+// with no prefix) and an expanded list of cell refs.
+function parseDefinedNameRef(ref: string): { sheetName: string | null; cellRefs: string[] } | null {
+  let s = ref.trim()
+  if (s.startsWith('=')) s = s.slice(1)
+  let sheetName: string | null = null
+  let rest = s
+  const m = s.match(/^(?:'([^']+)'|([^!]+))!(.+)$/)
+  if (m) {
+    sheetName = m[1] ?? m[2] ?? null
+    rest = m[3]
+  }
+  rest = rest.replace(/\$/g, '')
+  if (rest.includes(':')) {
+    const [a, b] = rest.split(':')
+    const aP = parseCellRef(a.toUpperCase())
+    const bP = parseCellRef(b.toUpperCase())
+    if (!aP || !bP) return null
+    const cellRefs: string[] = []
+    const minCol = Math.min(aP.col, bP.col)
+    const maxCol = Math.max(aP.col, bP.col)
+    const minRow = Math.min(aP.row, bP.row)
+    const maxRow = Math.max(aP.row, bP.row)
+    for (let r = minRow; r <= maxRow; r++) {
+      for (let c = minCol; c <= maxCol; c++) {
+        cellRefs.push(`${colLetterFromIdx(c)}${r}`)
+      }
+    }
+    return { sheetName, cellRefs }
+  }
+  const u = rest.toUpperCase()
+  if (!/^[A-Z]+\d+$/.test(u)) return null
+  return { sheetName, cellRefs: [u] }
+}
+
+interface DefinedNameEntry {
+  name: string
+  sheetName: string | null
+  cellRefs: string[]
+}
+
+// Read xl/workbook.xml's <definedName> entries — Excel's "Name Box" entries.
+// These are the named-range placeholders the user adds via Formulas → Define
+// Name (or just typing into the Name Box). Critically these are NOT cell text
+// and so cannot be found via sharedStrings.
+async function loadDefinedNames(zip: JSZip): Promise<DefinedNameEntry[]> {
+  const file = zip.file('xl/workbook.xml')
+  if (!file) return []
+  const xml = await file.async('string')
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  const out: DefinedNameEntry[] = []
+  for (const dn of getElementsByTagNameLocal(doc, 'definedName')) {
+    const name = dn.getAttribute('name') ?? ''
+    if (!name) continue
+    const refText = dn.textContent ?? ''
+    const parsed = parseDefinedNameRef(refText)
+    if (parsed) out.push({ name, sheetName: parsed.sheetName, cellRefs: parsed.cellRefs })
+  }
+  return out
+}
+
+// Collect cell refs for each requested placeholder by matching definedName
+// entries scoped to the given sheet (case-insensitive sheet name compare;
+// workbook-scoped names with no sheet prefix match every sheet). Each
+// placeholder picks 'exact' or 'contains' for matching against definedName
+// names — so REV_NUMBER with 'contains' also matches REV_NUMBER1, RV_REV_NUMBER
+// etc. Result is keyed by the *placeholder* (not the matched name), so all
+// REV_NUMBER variants stamp the rev value.
+function definedNameMatches(
+  entries: DefinedNameEntry[],
+  sheetName: string,
+  modes: Map<string, MatchMode>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  const sLower = sheetName.toLowerCase()
+  for (const e of entries) {
+    if (e.sheetName && e.sheetName.toLowerCase() !== sLower) continue
+    for (const [placeholder, mode] of modes) {
+      const hit = mode === 'exact' ? e.name === placeholder : e.name.includes(placeholder)
+      if (!hit) continue
+      const arr = out.get(placeholder) ?? []
+      for (const c of e.cellRefs) arr.push(c)
+      out.set(placeholder, arr)
+    }
+  }
+  return out
+}
+
+interface HeaderStampStats {
+  sheet: { configured: number; placeholder: number }
+  rev: { configured: number; placeholder: number }
+  doc: { configured: number; placeholder: number }
+}
+
+// Stamp page-number, revision, and DCC values into the sheet. Values land in:
+//   1) The cells configured in iis_template_layout (page_no_cell, rev_no_cells,
+//      doc_no_cell) — original cell-address mapping.
+//   2) Any cells matching one of three placeholder modes:
+//      a) Cell text matching "SHEET_NUMBER" / "REV_NUMBER" / "DCC_NO"
+//         (sharedStrings).
+//      b) An Excel definedName (Name Box) matching that placeholder, scoped to
+//         this sheet — these are NOT cell text, they live in xl/workbook.xml.
+//      SHEET_NUMBER and DCC_NO match exact (single header slot each); REV_NUMBER
+//      matches via 'contains' so variants like REV_NUMBER1, RV_REV_NUMBER also
+//      get the rev value — typical Aramco IIS templates have multiple rev
+//      slots per page.
+async function stampHeaderCells(
+  idx: SheetIndex,
+  L: LayoutRow,
+  pageLabel: string | null,
+  body: GenerateBody,
+  zip: JSZip,
+  sheetName: string,
+): Promise<HeaderStampStats> {
+  const stats: HeaderStampStats = {
+    sheet: { configured: 0, placeholder: 0 },
+    rev: { configured: 0, placeholder: 0 },
+    doc: { configured: 0, placeholder: 0 },
+  }
+  const wantSheet = pageLabel != null
+  const wantRev = body.rev_no != null && body.rev_no !== ''
+  const wantDoc = body.doc_no != null && body.doc_no !== ''
+  if (!wantSheet && !wantRev && !wantDoc) return stats
+
+  const modes = new Map<string, MatchMode>()
+  if (wantSheet) modes.set('SHEET_NUMBER', 'exact')
+  if (wantRev) modes.set('REV_NUMBER', 'contains')
+  if (wantDoc) modes.set('DCC_NO', 'exact')
+
+  const [sharedStrings, definedNames] = await Promise.all([
+    loadSharedStrings(zip),
+    loadDefinedNames(zip),
+  ])
+  const textCells = findPlaceholderCells(idx, sharedStrings, modes)
+  const nameCells = definedNameMatches(definedNames, sheetName, modes)
+  const mergeRanges = loadMergeRanges(idx.doc)
+
+  // Merge text-cell and defined-name hits into a single per-placeholder set,
+  // then redirect any cell that sits inside a merged area to the area's
+  // anchor — writing to non-anchor cells in a merge causes Excel to surface
+  // "We found a problem with some content" on open.
+  function mergedCells(key: string): string[] {
+    const out = new Set<string>()
+    for (const c of textCells.get(key) ?? []) out.add(redirectToAnchor(c, mergeRanges))
+    for (const c of nameCells.get(key) ?? []) out.add(redirectToAnchor(c, mergeRanges))
+    return Array.from(out)
+  }
+
+  const totalMatched =
+    mergedCells('SHEET_NUMBER').length +
+    mergedCells('REV_NUMBER').length +
+    mergedCells('DCC_NO').length
+  console.log('[iis/generate header]', {
+    template: L.template_code,
+    page: pageLabel,
+    sheet: sheetName,
+    wanted: { sheet: wantSheet, rev: wantRev, doc: wantDoc },
+    sharedStringCount: sharedStrings.length,
+    definedNameCount: definedNames.length,
+    matchedByText: {
+      SHEET_NUMBER: textCells.get('SHEET_NUMBER') ?? [],
+      REV_NUMBER: textCells.get('REV_NUMBER') ?? [],
+      DCC_NO: textCells.get('DCC_NO') ?? [],
+    },
+    matchedByName: {
+      SHEET_NUMBER: nameCells.get('SHEET_NUMBER') ?? [],
+      REV_NUMBER: nameCells.get('REV_NUMBER') ?? [],
+      DCC_NO: nameCells.get('DCC_NO') ?? [],
+    },
+    numberCandidates: totalMatched === 0
+      ? sharedStrings.filter(s => /number|dcc/i.test(s)).slice(0, 20)
+      : undefined,
+  })
+
+  if (wantSheet) {
+    const cells = new Set<string>()
+    if (L.page_no_cell) { cells.add(redirectToAnchor(L.page_no_cell, mergeRanges)); stats.sheet.configured = 1 }
+    const matched = mergedCells('SHEET_NUMBER')
+    for (const c of matched) cells.add(c)
+    stats.sheet.placeholder = matched.length
+    for (const c of cells) writeTextCell(idx, c, pageLabel!)
+  }
+  if (wantRev) {
+    const cells = new Set<string>()
+    if (L.rev_no_cells) for (const c of L.rev_no_cells) { cells.add(redirectToAnchor(c, mergeRanges)); stats.rev.configured++ }
+    const matched = mergedCells('REV_NUMBER')
+    for (const c of matched) cells.add(c)
+    stats.rev.placeholder = matched.length
+    for (const c of cells) writeTextCell(idx, c, body.rev_no!)
+  }
+  if (wantDoc) {
+    const cells = new Set<string>()
+    if (L.doc_no_cell) { cells.add(redirectToAnchor(L.doc_no_cell, mergeRanges)); stats.doc.configured = 1 }
+    const matched = mergedCells('DCC_NO')
+    for (const c of matched) cells.add(c)
+    stats.doc.placeholder = matched.length
+    for (const c of cells) writeTextCell(idx, c, body.doc_no!)
+  }
+  return stats
+}
+
+// Excel rebuilds xl/calcChain.xml automatically on next open. Leaving it
+// stale (because we overwrote cells that previously held formulas) makes
+// Excel show "Removed Records: Formula from /xl/calcChain.xml part" on open.
+// Safest fix per OOXML practice is to drop the calcChain part entirely.
+function dropCalcChain(zip: JSZip): void {
+  zip.remove('xl/calcChain.xml')
 }
 
 function resolveValue(m: CompiledMapping, tag: TagRow, issByTag: IssValueMap | null): string {
@@ -671,6 +990,11 @@ export async function POST(request: NextRequest) {
     let totalStamped = 0
     let anyOverflowed = false
     const usedTemplates: string[] = []
+    const headerStats: HeaderStampStats = {
+      sheet: { configured: 0, placeholder: 0 },
+      rev: { configured: 0, placeholder: 0 },
+      doc: { configured: 0, placeholder: 0 },
+    }
 
     for (const [code, tags] of Array.from(bucketsByTpl.entries()).sort(([a], [b]) => a.localeCompare(b))) {
       const L = layoutByCode.get(code)!
@@ -708,8 +1032,15 @@ export async function POST(request: NextRequest) {
           continue
         }
         const { stampedTags, overflowed } = stampPageOntoSheet(sheetIdx, mappings, pageTags, L, issByTag)
-        stampHeaderCells(sheetIdx, L, String(p).padStart(3, '0'), body)
+        const hStats = await stampHeaderCells(sheetIdx, L, String(p).padStart(3, '0'), body, zip, firstSheet.name)
+        headerStats.sheet.configured += hStats.sheet.configured
+        headerStats.sheet.placeholder += hStats.sheet.placeholder
+        headerStats.rev.configured += hStats.rev.configured
+        headerStats.rev.placeholder += hStats.rev.placeholder
+        headerStats.doc.configured += hStats.doc.configured
+        headerStats.doc.placeholder += hStats.doc.placeholder
         zip.file(firstSheet.sheetFile, serializer.serializeToString(sheetDoc))
+        dropCalcChain(zip)
         const bytes = await zip.generateAsync({ type: 'uint8array' })
 
         const pageName = `${code}/${code}_page${String(p).padStart(3, '0')}-of-${String(totalPages).padStart(3, '0')}.xlsx`
@@ -728,6 +1059,7 @@ export async function POST(request: NextRequest) {
           const sheetDoc = parser.parseFromString(xmlStr, 'text/xml')
           buildMergedFlatSheet(sheetDoc, mappings, tags, issByTag)
           zip.file(firstSheet.sheetFile, serializer.serializeToString(sheetDoc))
+          dropCalcChain(zip)
           const bytes = await zip.generateAsync({ type: 'uint8array' })
           outerZip.file(`${code}/${code}_MERGED.xlsx`, bytes)
         }
@@ -773,6 +1105,7 @@ export async function POST(request: NextRequest) {
         'X-IIS-Unclassified': String(unclassified.length),
         'X-IIS-Templates': usedTemplates.join(','),
         'X-IIS-Overflowed': anyOverflowed ? '1' : '0',
+        'X-IIS-Header-Stamps': `sheet=${headerStats.sheet.configured}+${headerStats.sheet.placeholder}, rev=${headerStats.rev.configured}+${headerStats.rev.placeholder}, doc=${headerStats.doc.configured}+${headerStats.doc.placeholder}`,
       },
     })
    } catch (e) {
@@ -851,7 +1184,7 @@ export async function POST(request: NextRequest) {
     pageTags: TagRow[],
     pageNum: number,
     issByTag: IssValueMap | null,
-  ): Promise<{ bytes: Uint8Array; stampedTags: number; overflowed: boolean }> {
+  ): Promise<{ bytes: Uint8Array; stampedTags: number; overflowed: boolean; headerStats: HeaderStampStats }> {
     const zip = await JSZip.loadAsync(templateBuffer)
     const sheetInfos = await getSheetInfos(zip)
     if (sheetInfos.length === 0) throw new Error('Template has no worksheets')
@@ -862,11 +1195,16 @@ export async function POST(request: NextRequest) {
     const sheetIdx = buildSheetIndex(sheetDoc)
     if (!sheetIdx) throw new Error('Template sheetData not found')
     const { stampedTags, overflowed } = stampPageOntoSheet(sheetIdx, mappings, pageTags, L, issByTag)
-    stampHeaderCells(sheetIdx, L, String(pageNum).padStart(3, '0'), body)
+    const headerStats = await stampHeaderCells(sheetIdx, L, String(pageNum).padStart(3, '0'), body, zip, firstSheet.name)
 
     zip.file(firstSheet.sheetFile, serializer.serializeToString(sheetDoc))
+    dropCalcChain(zip)
     const bytes = await zip.generateAsync({ type: 'uint8array' })
-    return { bytes, stampedTags, overflowed }
+    return { bytes, stampedTags, overflowed, headerStats }
+  }
+
+  function formatHeaderStats(s: HeaderStampStats): string {
+    return `sheet=${s.sheet.configured}+${s.sheet.placeholder}, rev=${s.rev.configured}+${s.rev.placeholder}, doc=${s.doc.configured}+${s.doc.placeholder}`
   }
 
   async function renderMergedXlsx(allTags: TagRow[], issByTag: IssValueMap | null): Promise<Uint8Array> {
@@ -878,6 +1216,7 @@ export async function POST(request: NextRequest) {
     const sheetDoc = parser.parseFromString(xmlStr, 'text/xml')
     buildMergedFlatSheet(sheetDoc, mappings, allTags, issByTag)
     zip.file(firstSheet.sheetFile, serializer.serializeToString(sheetDoc))
+    dropCalcChain(zip)
     return zip.generateAsync({ type: 'uint8array' })
   }
 
@@ -897,7 +1236,7 @@ export async function POST(request: NextRequest) {
     }
     const tagNumbers = r0.tags.map(t => t.tag_number).filter(Boolean) as string[]
     const issByTag = await fetchIssValueMap(supabase, projectId, tagNumbers, issFieldIds)
-    const { bytes, stampedTags, overflowed } = await renderPageXlsx(r0.tags, pageNum, issByTag)
+    const { bytes, stampedTags, overflowed, headerStats } = await renderPageXlsx(r0.tags, pageNum, issByTag)
     const buf = Buffer.from(bytes)
     const filename = `${template_code}${filterTag}_page${pageNum}-of-${totalPages}.xlsx`
     return new NextResponse(buf, {
@@ -911,6 +1250,7 @@ export async function POST(request: NextRequest) {
         'X-IIS-Page': String(pageNum),
         'X-IIS-Stamped-Tags': String(stampedTags),
         'X-IIS-Overflowed': overflowed ? '1' : '0',
+        'X-IIS-Header-Stamps': formatHeaderStats(headerStats),
       },
     })
   }
@@ -971,13 +1311,24 @@ export async function POST(request: NextRequest) {
   const outerZip = new JSZip()
   let totalStamped = 0
   let anyOverflowed = false
+  const aggHeaderStats: HeaderStampStats = {
+    sheet: { configured: 0, placeholder: 0 },
+    rev: { configured: 0, placeholder: 0 },
+    doc: { configured: 0, placeholder: 0 },
+  }
 
   for (let p = 1; p <= totalPages; p++) {
     const pageTags = allTags.slice((p - 1) * rowsPerPage, p * rowsPerPage)
     if (pageTags.length === 0) break
-    const { bytes, stampedTags, overflowed } = await renderPageXlsx(pageTags, p, issByTag)
+    const { bytes, stampedTags, overflowed, headerStats } = await renderPageXlsx(pageTags, p, issByTag)
     totalStamped += stampedTags
     if (overflowed) anyOverflowed = true
+    aggHeaderStats.sheet.configured += headerStats.sheet.configured
+    aggHeaderStats.sheet.placeholder += headerStats.sheet.placeholder
+    aggHeaderStats.rev.configured += headerStats.rev.configured
+    aggHeaderStats.rev.placeholder += headerStats.rev.placeholder
+    aggHeaderStats.doc.configured += headerStats.doc.configured
+    aggHeaderStats.doc.placeholder += headerStats.doc.placeholder
     const pageName = `${template_code}${filterTag}_page${String(p).padStart(3, '0')}-of-${String(totalPages).padStart(3, '0')}.xlsx`
     outerZip.file(pageName, bytes)
   }
@@ -1000,6 +1351,7 @@ export async function POST(request: NextRequest) {
       'X-IIS-Total-Pages': String(totalPages),
       'X-IIS-Stamped-Tags': String(totalStamped),
       'X-IIS-Overflowed': anyOverflowed ? '1' : '0',
+      'X-IIS-Header-Stamps': formatHeaderStats(aggHeaderStats),
     },
   })
  } catch (e) {
