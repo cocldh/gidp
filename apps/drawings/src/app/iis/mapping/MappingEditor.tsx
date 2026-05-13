@@ -297,34 +297,30 @@ export default function MappingEditor({ projectId, templates }: Props) {
 }
 
 // ---------------------------------------------------------------------------
-// Generate panel — produces one-page xlsx for the selected template.
+// Test-page extract panel — pulls one page of the selected SA form using the
+// current mapping so the user can eyeball the result. Bulk generation lives
+// at /drawings/iis/generate.
 // ---------------------------------------------------------------------------
 
 function GeneratePanel({ templateCode }: { templateCode: string }) {
-  const [midLetter, setMidLetter] = useState('P')
   const [page, setPage] = useState(1)
-  const [mode, setMode] = useState<'single' | 'all'>('single')
   const [revNo, setRevNo] = useState('')
   const [docNo, setDocNo] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [info, setInfo] = useState<{ total: number; pages: number; page: number | null; stamped: number; overflowed: boolean; mode: 'single' | 'all' } | null>(null)
+  const [info, setInfo] = useState<{ total: number; pages: number; page: number; stamped: number; overflowed: boolean } | null>(null)
 
   async function generate() {
     setBusy(true)
     setErr(null)
     try {
-      const filter = midLetter.trim()
-        ? { kind: 'loop_mid_letter', value: midLetter.trim().toUpperCase() }
-        : { kind: 'all' }
       const res = await fetch('/drawings/api/iis/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           template_code: templateCode,
-          filter,
-          mode,
-          page: mode === 'single' ? page : undefined,
+          mode: 'single',
+          page,
           rev_no: revNo.trim() || undefined,
           doc_no: docNo.trim() || undefined,
         }),
@@ -336,16 +332,15 @@ function GeneratePanel({ templateCode }: { templateCode: string }) {
       }
       const total = parseInt(res.headers.get('X-IIS-Total-Tags') ?? '0')
       const pages = parseInt(res.headers.get('X-IIS-Total-Pages') ?? '0')
-      const pageHeader = res.headers.get('X-IIS-Page')
-      const pageNo = pageHeader ? parseInt(pageHeader) : null
+      const pageNo = parseInt(res.headers.get('X-IIS-Page') ?? String(page))
       const stamped = parseInt(res.headers.get('X-IIS-Stamped-Tags') ?? '0')
       const overflowed = (res.headers.get('X-IIS-Overflowed') ?? '0') === '1'
-      setInfo({ total, pages, page: pageNo, stamped, overflowed, mode })
+      setInfo({ total, pages, page: pageNo, stamped, overflowed })
 
       const blob = await res.blob()
       const cd = res.headers.get('Content-Disposition') ?? ''
       const m = cd.match(/filename="([^"]+)"/)
-      const filename = m?.[1] ?? `${templateCode}.${mode === 'all' ? 'zip' : 'xlsx'}`
+      const filename = m?.[1] ?? `${templateCode}.xlsx`
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -363,50 +358,23 @@ function GeneratePanel({ templateCode }: { templateCode: string }) {
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4 mt-6">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-xs uppercase tracking-wider text-gray-400">Generate xlsx</div>
-          <div className="text-sm text-gray-600">
-            {mode === 'single'
-              ? '한 페이지 xlsx 를 생성합니다.'
-              : '전체 페이지를 zip 으로 묶어 다운로드합니다. zip 안에 페이지별 xlsx + 한 시트에 전체 행이 들어간 _MERGED.xlsx 포함.'}
-          </div>
+      <div className="mb-3">
+        <div className="text-xs uppercase tracking-wider text-gray-400">Test page extract</div>
+        <div className="text-sm text-gray-600">
+          현재 매핑으로 <b>{templateCode}</b> 의 한 페이지만 추출해 검토합니다. 분류는 classification rule 기준 — 이 SA form 으로 라우팅되는 태그만 대상. 대량 생성은 <a href="/drawings/iis/generate" className="text-[#000080] underline">Generation</a> 페이지에서.
         </div>
-      </div>
-      <div className="mb-3 flex items-center gap-4 text-sm">
-        <label className="flex items-center gap-1">
-          <input type="radio" checked={mode === 'single'} onChange={() => setMode('single')} />
-          Single page
-        </label>
-        <label className="flex items-center gap-1">
-          <input type="radio" checked={mode === 'all'} onChange={() => setMode('all')} />
-          All pages (zip + merged)
-        </label>
       </div>
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Loop mid letter</label>
+          <label className="block text-xs text-gray-500 mb-1">Page</label>
           <input
-            type="text"
-            value={midLetter}
-            onChange={(e) => setMidLetter(e.target.value.toUpperCase().slice(0, 1))}
-            placeholder="P (blank = all)"
-            className="w-28 border border-gray-300 rounded px-2 py-1 text-sm font-mono uppercase"
-            maxLength={1}
+            type="number"
+            value={page}
+            min={1}
+            onChange={(e) => setPage(Math.max(1, parseInt(e.target.value, 10) || 1))}
+            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm"
           />
         </div>
-        {mode === 'single' && (
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Page</label>
-            <input
-              type="number"
-              value={page}
-              min={1}
-              onChange={(e) => setPage(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              className="w-20 border border-gray-300 rounded px-2 py-1 text-sm"
-            />
-          </div>
-        )}
         <div>
           <label className="block text-xs text-gray-500 mb-1">REV. NO.</label>
           <input
@@ -433,13 +401,11 @@ function GeneratePanel({ templateCode }: { templateCode: string }) {
           disabled={busy}
           className="px-4 py-2 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700 disabled:opacity-50"
         >
-          {busy ? 'Generating…' : mode === 'all' ? 'Generate zip & download' : 'Generate & download'}
+          {busy ? 'Generating…' : 'Generate test page'}
         </button>
         {info && (
           <div className="text-xs text-gray-500">
-            총 <b>{info.total}</b> tags · <b>{info.pages}</b> pages
-            {info.mode === 'single' && info.page != null && <> · page <b>{info.page}</b></>}
-            {' · '}stamped <b>{info.stamped}</b>
+            총 <b>{info.total}</b> tags · <b>{info.pages}</b> pages · page <b>{info.page}</b> · stamped <b>{info.stamped}</b>
             {info.overflowed && <span className="ml-2 text-amber-600">⚠ overflow — 빈 행 때문에 일부 태그가 다음 페이지로 밀림</span>}
           </div>
         )}

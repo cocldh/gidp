@@ -13,20 +13,10 @@ interface Props {
 
 type Target = { kind: 'template'; code: string } | { kind: 'auto' }
 
-const MID_LETTERS = [
-  { value: '', label: '전체 (필터 없음)' },
-  { value: 'P', label: 'P — Pressure loops' },
-  { value: 'T', label: 'T — Temperature loops' },
-  { value: 'F', label: 'F — Flow loops' },
-  { value: 'L', label: 'L — Level loops' },
-  { value: 'A', label: 'A — Analyzer loops' },
-]
-
 export default function GenerationForm({ templates }: Props) {
   const [target, setTarget] = useState<Target>(
     templates.length > 0 ? { kind: 'template', code: templates[0].template_code } : { kind: 'auto' },
   )
-  const [midLetter, setMidLetter] = useState<string>('')
   const [revNo, setRevNo] = useState<string>('')
   const [docNo, setDocNo] = useState<string>('')
   const [busy, setBusy] = useState(false)
@@ -50,7 +40,6 @@ export default function GenerationForm({ templates }: Props) {
         body.mode = 'all'
         body.template_code = target.code
       }
-      if (midLetter) body.filter = { kind: 'loop_mid_letter', value: midLetter }
       if (revNo.trim()) body.rev_no = revNo.trim()
       if (docNo.trim()) body.doc_no = docNo.trim()
 
@@ -82,8 +71,8 @@ export default function GenerationForm({ templates }: Props) {
       const filename = fnMatch
         ? fnMatch[1]
         : target.kind === 'auto'
-          ? `IIS_auto${midLetter ? `_${midLetter}` : ''}.zip`
-          : `${target.code}${midLetter ? `_${midLetter}` : ''}_all.zip`
+          ? `IIS_auto.zip`
+          : `${target.code}_all.zip`
 
       const blob = await res.blob()
       if (blob.size === 0) throw new Error('Empty response body — nothing to download')
@@ -159,19 +148,7 @@ export default function GenerationForm({ templates }: Props) {
       {/* Options */}
       <section className="border border-gray-200 rounded-lg bg-white p-5">
         <div className="text-sm font-semibold text-gray-800 mb-3">Options</div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <label className="text-sm">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Loop mid letter</div>
-            <select
-              value={midLetter}
-              onChange={(e) => setMidLetter(e.target.value)}
-              className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm"
-            >
-              {MID_LETTERS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-          </label>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <label className="text-sm">
             <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Revision No.</div>
             <input
@@ -205,7 +182,6 @@ export default function GenerationForm({ templates }: Props) {
       <section className="flex items-center justify-between">
         <div className="text-sm text-gray-500">
           선택: <span className="font-mono text-gray-800">{targetLabel}</span>
-          {midLetter && <> · filter: <span className="font-mono text-gray-800">{midLetter}</span></>}
         </div>
         <button
           onClick={handleGenerate}

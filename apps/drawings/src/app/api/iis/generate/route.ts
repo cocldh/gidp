@@ -281,7 +281,6 @@ interface TagRow {
 
 interface GenerateBody {
   template_code?: string                                     // required for single/all; ignored for auto
-  filter?: { kind: 'loop_mid_letter'; value: string } | { kind: 'all' }
   page?: number                                              // 1-indexed; default 1. Ignored when mode!=single.
   mode?: 'single' | 'all' | 'auto'
   rev_no?: string
@@ -855,8 +854,6 @@ export async function POST(request: NextRequest) {
   let body: GenerateBody
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }) }
 
-  const filter = body.filter ?? { kind: 'all' }
-  const midLetter = filter.kind === 'loop_mid_letter' ? filter.value : null
   const pageNum = Math.max(1, body.page ?? 1)
   const mode: 'single' | 'all' | 'auto' =
     body.mode === 'all' ? 'all' : body.mode === 'auto' ? 'auto' : 'single'
@@ -932,7 +929,7 @@ export async function POST(request: NextRequest) {
       .schema('drawings')
       .rpc('iis_fetch_all_tags_jsonb', {
         p_project_id: projectId,
-        p_loop_mid_letter: midLetter,
+        p_loop_mid_letter: null,
         p_columns: projectionCols,
       })
     if (fetchErr) return NextResponse.json({ error: `Tag fetch failed: ${fetchErr.message}` }, { status: 500 })
@@ -953,7 +950,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (totalFetched === 0) {
-      return NextResponse.json({ error: `No tags (filter ${midLetter ?? 'all'})` }, { status: 400 })
+      return NextResponse.json({ error: 'No tags' }, { status: 400 })
     }
 
     // 3.5) Bulk-fetch ISS document_value for every tag that landed in any bucket,
@@ -970,8 +967,7 @@ export async function POST(request: NextRequest) {
     // 4) Render per-template per-page xlsx + MERGED.xlsx into outer zip.
     const outerZip = new JSZip()
     const summary: string[] = []
-    const filterTag = midLetter ? ` (loop_mid_letter=${midLetter})` : ''
-    summary.push(`IIS auto-classification report${filterTag}`)
+    summary.push('IIS auto-classification report')
     summary.push(`Total tags fetched: ${totalFetched}`)
     summary.push(`Classification rules: ${sortedRules.length}`)
     summary.push('')
@@ -1093,7 +1089,7 @@ export async function POST(request: NextRequest) {
 
     const zipBytes = await outerZip.generateAsync({ type: 'uint8array' })
     const buf = Buffer.from(zipBytes)
-    const zipName = `IIS_auto${midLetter ? `_${midLetter}` : ''}.zip`
+    const zipName = 'IIS_auto.zip'
     return new NextResponse(buf, {
       status: 200,
       headers: {
@@ -1149,26 +1145,14 @@ export async function POST(request: NextRequest) {
 
   const mappings = await compileMappings(supabase, rawMaps as RawMapping[])
 
-  // 3) Tag fetcher (paged rpc with column projection)
+  // 3) Tag fetcher — single + all both use classification-rule routing so the
+  //    set of tags is exactly those that belong to this SA form. Loop mid
+  //    letter is gone (the dropdown was orthogonal to template routing and
+  //    caused timeouts on large projects).
   const projectionCols = Array.from(new Set([
     '1_TAG NUMBER', '5_LOOP NUMBER', '11_INTERNAL LOOP ORDER',
     ...mappings.flatMap(m => m.idx_column_names),
   ]))
-
-  async function fetchPage(p: number): Promise<{ tags: TagRow[]; totalTags: number } | { error: string }> {
-    const { data, error } = await supabase
-      .schema('drawings')
-      .rpc('iis_fetch_tags_page', {
-        p_project_id: projectId,
-        p_loop_mid_letter: midLetter,
-        p_columns: projectionCols,
-        p_limit: rowsPerPage,
-        p_offset: (p - 1) * rowsPerPage,
-      })
-    if (error) return { error: `Tag fetch failed: ${error.message}` }
-    const tags = (data ?? []) as TagRow[]
-    return { tags, totalTags: tags.length > 0 ? (tags[0].total_count ?? 0) : 0 }
-  }
 
   // 4) Download template xlsx once; reload per page (JSZip mutates).
   const storagePath = `iis/${template_code}.xlsx`
@@ -1220,44 +1204,12 @@ export async function POST(request: NextRequest) {
     return zip.generateAsync({ type: 'uint8array' })
   }
 
-  const filterTag = midLetter ? `_${midLetter}` : ''
-
-  // Mode: single
-  if (mode === 'single') {
-    const r0 = await fetchPage(pageNum)
-    if ('error' in r0) return NextResponse.json({ error: r0.error }, { status: 500 })
-    if (r0.tags.length === 0) {
-      return NextResponse.json({ error: `No tags on page ${pageNum} (filter ${midLetter ?? 'all'})` }, { status: 400 })
-    }
-    const totalTags = r0.totalTags
-    const totalPages = Math.max(1, Math.ceil(totalTags / rowsPerPage))
-    if (pageNum > totalPages) {
-      return NextResponse.json({ error: `Page ${pageNum} out of range (total ${totalPages})` }, { status: 400 })
-    }
-    const tagNumbers = r0.tags.map(t => t.tag_number).filter(Boolean) as string[]
-    const issByTag = await fetchIssValueMap(supabase, projectId, tagNumbers, issFieldIds)
-    const { bytes, stampedTags, overflowed, headerStats } = await renderPageXlsx(r0.tags, pageNum, issByTag)
-    const buf = Buffer.from(bytes)
-    const filename = `${template_code}${filterTag}_page${pageNum}-of-${totalPages}.xlsx`
-    return new NextResponse(buf, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': String(buf.byteLength),
-        'X-IIS-Total-Tags': String(totalTags),
-        'X-IIS-Total-Pages': String(totalPages),
-        'X-IIS-Page': String(pageNum),
-        'X-IIS-Stamped-Tags': String(stampedTags),
-        'X-IIS-Overflowed': overflowed ? '1' : '0',
-        'X-IIS-Header-Stamps': formatHeaderStats(headerStats),
-      },
-    })
-  }
-
-  // Mode: all — apply classification rules to pull only the tags that route
-  // to this template. Falls back to "all tags" only if no rules are defined
-  // for this template (legacy behavior).
+  // Both single and all modes use the same classification-routed tag set —
+  // single just slices one page out of it. Without this unification, single
+  // mode used iis_fetch_tags_page which (a) has no statement_timeout override
+  // and (b) was filtered by loop_mid_letter which is orthogonal to which SA
+  // form a tag belongs to. On 27K-row projects it hit Supabase's default 8s
+  // limit ("canceling statement due to statement timeout").
   const [
     { data: rulesRaw, error: rErr },
     { data: fkSummaryRaw, error: fkErr },
@@ -1294,17 +1246,45 @@ export async function POST(request: NextRequest) {
     .rpc('iis_fetch_tags_by_function_keys', {
       p_project_id: projectId,
       p_function_keys: hasRulesForThisTemplate ? matchedFks : null,
-      p_loop_mid_letter: midLetter,
+      p_loop_mid_letter: null,
       p_columns: projectionCols,
     })
   if (bulkErr) return NextResponse.json({ error: `Tag fetch failed: ${bulkErr.message}` }, { status: 500 })
   const allTags = (Array.isArray(bulkRows) ? bulkRows : []) as TagRow[]
   const totalTags = allTags.length
   if (totalTags === 0) {
-    return NextResponse.json({ error: `No tags (filter ${midLetter ?? 'all'})` }, { status: 400 })
+    return NextResponse.json({ error: `No tags route to ${template_code}` }, { status: 400 })
   }
   const totalPages = Math.max(1, Math.ceil(totalTags / rowsPerPage))
 
+  // Mode: single — slice one page, render one xlsx.
+  if (mode === 'single') {
+    if (pageNum > totalPages) {
+      return NextResponse.json({ error: `Page ${pageNum} out of range (total ${totalPages})` }, { status: 400 })
+    }
+    const pageTags = allTags.slice((pageNum - 1) * rowsPerPage, pageNum * rowsPerPage)
+    const tagNumbers = pageTags.map(t => t.tag_number).filter(Boolean) as string[]
+    const issByTag = await fetchIssValueMap(supabase, projectId, tagNumbers, issFieldIds)
+    const { bytes, stampedTags, overflowed, headerStats } = await renderPageXlsx(pageTags, pageNum, issByTag)
+    const buf = Buffer.from(bytes)
+    const filename = `${template_code}_page${pageNum}-of-${totalPages}.xlsx`
+    return new NextResponse(buf, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': String(buf.byteLength),
+        'X-IIS-Total-Tags': String(totalTags),
+        'X-IIS-Total-Pages': String(totalPages),
+        'X-IIS-Page': String(pageNum),
+        'X-IIS-Stamped-Tags': String(stampedTags),
+        'X-IIS-Overflowed': overflowed ? '1' : '0',
+        'X-IIS-Header-Stamps': formatHeaderStats(headerStats),
+      },
+    })
+  }
+
+  // Mode: all — every page + a MERGED.xlsx, zipped.
   const allTagNumbers = allTags.map(t => t.tag_number).filter(Boolean) as string[]
   const issByTag = await fetchIssValueMap(supabase, projectId, allTagNumbers, issFieldIds)
 
@@ -1329,16 +1309,16 @@ export async function POST(request: NextRequest) {
     aggHeaderStats.rev.placeholder += headerStats.rev.placeholder
     aggHeaderStats.doc.configured += headerStats.doc.configured
     aggHeaderStats.doc.placeholder += headerStats.doc.placeholder
-    const pageName = `${template_code}${filterTag}_page${String(p).padStart(3, '0')}-of-${String(totalPages).padStart(3, '0')}.xlsx`
+    const pageName = `${template_code}_page${String(p).padStart(3, '0')}-of-${String(totalPages).padStart(3, '0')}.xlsx`
     outerZip.file(pageName, bytes)
   }
 
   const mergedBytes = await renderMergedXlsx(allTags, issByTag)
-  const mergedName = `${template_code}${filterTag}_MERGED.xlsx`
+  const mergedName = `${template_code}_MERGED.xlsx`
   outerZip.file(mergedName, mergedBytes)
 
   const zipBytes = await outerZip.generateAsync({ type: 'uint8array' })
-  const zipName = `${template_code}${filterTag}_all.zip`
+  const zipName = `${template_code}_all.zip`
 
   const buf = Buffer.from(zipBytes)
   return new NextResponse(buf, {
