@@ -1,0 +1,33 @@
+{
+  "name": "@gidp/drawings",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3003 -H 0.0.0.0",
+    "build": "next build",
+    "start": "next start -p 3003",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gidp/auth": "workspace:*",
+    "@gidp/domain": "workspace:*",
+    "@gidp/ui": "workspace:*",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.95.3",
+    "@xmldom/xmldom": "^0.8.11",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.468.0",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@gidp/config": "workspace:*",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
