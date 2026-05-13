@@ -299,16 +299,9 @@ function colLetterFromIdx(n: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Function key extraction + classification (mirror of drawings.tag_function_key
-// + iis_classification_rule evaluation; preview UI uses the same logic).
+// Loop-type classification (mirror of iis_classification_rule evaluation;
+// preview UI uses the same logic). Source: idx.index_record.data['7_LOOP TYPE'].
 // ---------------------------------------------------------------------------
-
-function extractFunctionKey(tagNumber: string | null | undefined): string | null {
-  if (!tagNumber) return null
-  const segs = tagNumber.split('-')
-  if (segs.length < 2) return null
-  return segs[segs.length - 2] || null
-}
 
 // Sort rules by priority asc, then by longer match_value first, then rule order.
 function sortRules(rules: ClassificationRule[]): ClassificationRule[] {
@@ -318,14 +311,14 @@ function sortRules(rules: ClassificationRule[]): ClassificationRule[] {
   })
 }
 
-function classifyFunctionKey(fk: string | null, sortedRules: ClassificationRule[]): string | null {
-  if (!fk) return null
+function classifyLoopType(loopType: string | null, sortedRules: ClassificationRule[]): string | null {
+  if (!loopType) return null
   for (const r of sortedRules) {
     try {
       if (r.match_kind === 'prefix') {
-        if (fk.startsWith(r.match_value)) return r.template_code
+        if (loopType.startsWith(r.match_value)) return r.template_code
       } else {
-        if (new RegExp(r.match_value).test(fk)) return r.template_code
+        if (new RegExp(r.match_value).test(loopType)) return r.template_code
       }
     } catch {
       // bad regex — skip (validated at save time)
@@ -918,8 +911,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Projection columns: union across all templates' idx column names.
+    // 7_LOOP TYPE must be included for classification in JS after fetch.
     const projectionCols = Array.from(new Set([
-      '1_TAG NUMBER', '5_LOOP NUMBER', '11_INTERNAL LOOP ORDER',
+      '1_TAG NUMBER', '5_LOOP NUMBER', '11_INTERNAL LOOP ORDER', '7_LOOP TYPE',
       ...Array.from(mappingsByTpl.values()).flatMap(ms => ms.flatMap(m => m.idx_column_names)),
     ]))
 
@@ -938,8 +932,8 @@ export async function POST(request: NextRequest) {
     const allTagRows = (Array.isArray(jsonResult) ? jsonResult : []) as TagRow[]
     const totalFetched = allTagRows.length
     for (const t of allTagRows) {
-      const fk = extractFunctionKey(t.tag_number)
-      const tpl = classifyFunctionKey(fk, sortedRules)
+      const loopType = t.data?.['7_LOOP TYPE'] != null ? String(t.data['7_LOOP TYPE']).trim() : null
+      const tpl = classifyLoopType(loopType, sortedRules)
       if (tpl && layoutByCode.has(tpl)) {
         const arr = bucketsByTpl.get(tpl) ?? []
         arr.push(t)
@@ -1072,10 +1066,10 @@ export async function POST(request: NextRequest) {
 
     // 5) UNCLASSIFIED.csv
     if (unclassified.length > 0) {
-      const lines: string[] = ['tag_number,function_key,loop_number']
+      const lines: string[] = ['tag_number,loop_type,loop_number']
       for (const t of unclassified) {
-        const fk = extractFunctionKey(t.tag_number) ?? ''
-        lines.push([csvCell(t.tag_number), csvCell(fk), csvCell(t.loop_number)].join(','))
+        const lt = t.data?.['7_LOOP TYPE'] != null ? String(t.data['7_LOOP TYPE']).trim() : ''
+        lines.push([csvCell(t.tag_number), csvCell(lt), csvCell(t.loop_number)].join(','))
       }
       outerZip.file('UNCLASSIFIED.csv', lines.join('\r\n'))
       summary.push('')
@@ -1150,7 +1144,7 @@ export async function POST(request: NextRequest) {
   //    letter is gone (the dropdown was orthogonal to template routing and
   //    caused timeouts on large projects).
   const projectionCols = Array.from(new Set([
-    '1_TAG NUMBER', '5_LOOP NUMBER', '11_INTERNAL LOOP ORDER',
+    '1_TAG NUMBER', '5_LOOP NUMBER', '11_INTERNAL LOOP ORDER', '7_LOOP TYPE',
     ...mappings.flatMap(m => m.idx_column_names),
   ]))
 
@@ -1205,14 +1199,10 @@ export async function POST(request: NextRequest) {
   }
 
   // Both single and all modes use the same classification-routed tag set —
-  // single just slices one page out of it. Without this unification, single
-  // mode used iis_fetch_tags_page which (a) has no statement_timeout override
-  // and (b) was filtered by loop_mid_letter which is orthogonal to which SA
-  // form a tag belongs to. On 27K-row projects it hit Supabase's default 8s
-  // limit ("canceling statement due to statement timeout").
+  // single just slices one page out of it.
   const [
     { data: rulesRaw, error: rErr },
-    { data: fkSummaryRaw, error: fkErr },
+    { data: ltSummaryRaw, error: ltErr },
   ] = await Promise.all([
     supabase
       .schema('drawings')
@@ -1222,30 +1212,30 @@ export async function POST(request: NextRequest) {
       .eq('is_active', true),
     supabase
       .schema('drawings')
-      .rpc('iis_function_key_summary', { p_project_id: projectId }),
+      .rpc('iis_loop_type_summary', { p_project_id: projectId }),
   ])
   if (rErr) return NextResponse.json({ error: `Rule load failed: ${rErr.message}` }, { status: 500 })
-  if (fkErr) return NextResponse.json({ error: `Function-key summary failed: ${fkErr.message}` }, { status: 500 })
+  if (ltErr) return NextResponse.json({ error: `Loop-type summary failed: ${ltErr.message}` }, { status: 500 })
 
   const sortedRules = sortRules((rulesRaw ?? []) as ClassificationRule[])
-  const allFunctionKeys = ((fkSummaryRaw ?? []) as Array<{ function_key: string }>).map(r => r.function_key)
-  const matchedFks: string[] = []
-  for (const fk of allFunctionKeys) {
-    if (classifyFunctionKey(fk, sortedRules) === template_code) matchedFks.push(fk)
+  const allLoopTypes = ((ltSummaryRaw ?? []) as Array<{ loop_type: string }>).map(r => r.loop_type)
+  const matchedLoopTypes: string[] = []
+  for (const lt of allLoopTypes) {
+    if (classifyLoopType(lt, sortedRules) === template_code) matchedLoopTypes.push(lt)
   }
 
   const hasRulesForThisTemplate = sortedRules.some(r => r.template_code === template_code)
-  if (hasRulesForThisTemplate && matchedFks.length === 0) {
+  if (hasRulesForThisTemplate && matchedLoopTypes.length === 0) {
     return NextResponse.json({
-      error: `No tag function keys route to ${template_code}. Check classification rules.`,
+      error: `No loop types route to ${template_code}. Check classification rules.`,
     }, { status: 400 })
   }
 
   const { data: bulkRows, error: bulkErr } = await supabase
     .schema('drawings')
-    .rpc('iis_fetch_tags_by_function_keys', {
+    .rpc('iis_fetch_tags_by_loop_types', {
       p_project_id: projectId,
-      p_function_keys: hasRulesForThisTemplate ? matchedFks : null,
+      p_loop_types: hasRulesForThisTemplate ? matchedLoopTypes : null,
       p_loop_mid_letter: null,
       p_columns: projectionCols,
     })

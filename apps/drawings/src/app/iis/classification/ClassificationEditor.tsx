@@ -8,10 +8,9 @@ interface TemplateRow {
   description: string | null
 }
 
-interface FunctionKeyRow {
-  function_key: string
+interface LoopTypeRow {
+  loop_type: string
   n: number
-  sample_instrument_type: string | null
 }
 
 type MatchKind = 'prefix' | 'regex'
@@ -40,7 +39,7 @@ interface DraftRule {
 interface Props {
   projectId: number
   templates: TemplateRow[]
-  functionKeys: FunctionKeyRow[]
+  loopTypes: LoopTypeRow[]
 }
 
 const UNCLASSIFIED = '__unclassified__'
@@ -69,9 +68,9 @@ function newDraft(template: string, priority: number): DraftRule {
   }
 }
 
-// Apply the rule list to a function_key, returning the matched template or null.
+// Classify a loop_type string against the rule list.
 // Mirrors the Postgres-side evaluation used by the generate route.
-function classify(functionKey: string, rules: DraftRule[]): string | null {
+function classify(loopType: string, rules: DraftRule[]): string | null {
   const active = rules
     .filter((r) => !r._deleted && r.is_active && r.match_value.trim() !== '')
     .sort((a, b) => {
@@ -81,9 +80,9 @@ function classify(functionKey: string, rules: DraftRule[]): string | null {
   for (const r of active) {
     try {
       if (r.match_kind === 'prefix') {
-        if (functionKey.startsWith(r.match_value)) return r.template_code
+        if (loopType.startsWith(r.match_value)) return r.template_code
       } else {
-        if (new RegExp(r.match_value).test(functionKey)) return r.template_code
+        if (new RegExp(r.match_value).test(loopType)) return r.template_code
       }
     } catch {
       // bad regex, skip silently in preview; save validation will catch it
@@ -92,7 +91,7 @@ function classify(functionKey: string, rules: DraftRule[]): string | null {
   return null
 }
 
-export default function ClassificationEditor({ projectId, templates, functionKeys }: Props) {
+export default function ClassificationEditor({ projectId, templates, loopTypes }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [drafts, setDrafts] = useState<DraftRule[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,25 +137,20 @@ export default function ClassificationEditor({ projectId, templates, functionKey
     [drafts],
   )
 
-  // Live classification preview from functionKeys + current draft rules.
+  // Live classification preview from loopTypes + current draft rules.
   const classification = useMemo(() => {
-    const byTemplate: Record<string, { tags: number; keys: number }> = {}
-    const rowResults: { function_key: string; sample: string | null; n: number; template: string | null }[] = []
-    for (const fk of functionKeys) {
-      const tpl = classify(fk.function_key, drafts)
+    const byTemplate: Record<string, { tags: number; types: number }> = {}
+    const rowResults: { loop_type: string; n: number; template: string | null }[] = []
+    for (const lt of loopTypes) {
+      const tpl = classify(lt.loop_type, drafts)
       const key = tpl ?? UNCLASSIFIED
-      byTemplate[key] = byTemplate[key] || { tags: 0, keys: 0 }
-      byTemplate[key].tags += fk.n
-      byTemplate[key].keys += 1
-      rowResults.push({
-        function_key: fk.function_key,
-        sample: fk.sample_instrument_type,
-        n: fk.n,
-        template: tpl,
-      })
+      byTemplate[key] = byTemplate[key] || { tags: 0, types: 0 }
+      byTemplate[key].tags += lt.n
+      byTemplate[key].types += 1
+      rowResults.push({ loop_type: lt.loop_type, n: lt.n, template: tpl })
     }
     return { byTemplate, rowResults }
-  }, [drafts, functionKeys])
+  }, [drafts, loopTypes])
 
   const filteredPreview = useMemo(() => {
     const q = previewSearch.trim().toLowerCase()
@@ -168,10 +162,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
       })
       .filter((r) => {
         if (q === '') return true
-        return (
-          r.function_key.toLowerCase().includes(q) ||
-          (r.sample ?? '').toLowerCase().includes(q)
-        )
+        return r.loop_type.toLowerCase().includes(q)
       })
   }, [classification.rowResults, previewFilter, previewSearch])
 
@@ -304,7 +295,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
               <tr>
                 <th className="px-2 py-2 text-left w-16">Prio</th>
                 <th className="px-2 py-2 text-left w-20">Kind</th>
-                <th className="px-2 py-2 text-left">Match value (function key)</th>
+                <th className="px-2 py-2 text-left">Match value (7_LOOP TYPE)</th>
                 <th className="px-2 py-2 text-left w-28">Template</th>
                 <th className="px-2 py-2 text-center w-12">On</th>
                 <th className="px-2 py-2 text-right w-12"></th>
@@ -339,7 +330,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
                       type="text"
                       value={d.match_value}
                       onChange={(e) => updateDraft(d.draftId, { match_value: e.target.value })}
-                      placeholder={d.match_kind === 'prefix' ? 'PT, PSV …' : '^P[A-Z]*$'}
+                      placeholder={d.match_kind === 'prefix' ? 'PRESSURE, AOV …' : '^DETECTOR.*$'}
                       className="w-full px-2 py-1 border border-gray-200 rounded font-mono text-sm"
                     />
                   </td>
@@ -385,9 +376,9 @@ export default function ClassificationEditor({ projectId, templates, functionKey
           </table>
         </div>
         <p className="mt-2 text-xs text-gray-400">
-          매칭 대상은 tag number 의 <code className="font-mono">function key</code> (예:{' '}
-          <code className="font-mono">D44-403-PT-3005</code> → <code className="font-mono">PT</code>) 입니다.
-          prefix 는 function key 의 시작 부분, regex 는 function key 전체에 적용. 같은 priority 면 더 긴 match_value 가 먼저 적용됩니다.
+          매칭 대상은 Index 의 <code className="font-mono">7_LOOP TYPE</code> 컬럼값 (예:{' '}
+          <code className="font-mono">PRESSURE</code>, <code className="font-mono">AOV</code>) 입니다.
+          prefix 는 loop type 의 시작 부분, regex 는 loop type 전체에 적용. 같은 priority 면 더 긴 match_value 가 먼저 적용됩니다.
         </p>
       </section>
 
@@ -415,7 +406,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
                 <div className="mt-1 text-xs text-gray-700">
                   <span className="font-medium">{stat?.tags ?? 0}</span> tags
                   <span className="mx-1 text-gray-300">·</span>
-                  <span>{stat?.keys ?? 0} keys</span>
+                  <span>{stat?.types ?? 0} types</span>
                 </div>
               </button>
             )
@@ -431,7 +422,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
               <div className="text-xs text-gray-700 mt-1">
                 <span className="font-medium">{classification.byTemplate[UNCLASSIFIED].tags}</span> tags
                 <span className="mx-1 text-gray-300">·</span>
-                <span>{classification.byTemplate[UNCLASSIFIED].keys} keys</span>
+                <span>{classification.byTemplate[UNCLASSIFIED].types} types</span>
               </div>
             </button>
           )}
@@ -443,7 +434,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
             type="text"
             value={previewSearch}
             onChange={(e) => setPreviewSearch(e.target.value)}
-            placeholder="search function_key or instrument type…"
+            placeholder="search loop type…"
             className="flex-1 px-3 py-1.5 border border-gray-200 rounded text-sm"
           />
           <select
@@ -466,17 +457,15 @@ export default function ClassificationEditor({ projectId, templates, functionKey
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-500 sticky top-0">
               <tr>
-                <th className="px-3 py-2 text-left w-24">Function key</th>
-                <th className="px-3 py-2 text-left">Sample instrument type</th>
+                <th className="px-3 py-2 text-left">7_LOOP TYPE</th>
                 <th className="px-3 py-2 text-right w-16">Tags</th>
                 <th className="px-3 py-2 text-left w-28">Template</th>
               </tr>
             </thead>
             <tbody>
               {filteredPreview.map((r) => (
-                <tr key={r.function_key} className="border-t border-gray-100">
-                  <td className="px-3 py-1.5 font-mono text-xs">{r.function_key}</td>
-                  <td className="px-3 py-1.5 text-xs text-gray-500 truncate max-w-[20ch]">{r.sample ?? ''}</td>
+                <tr key={r.loop_type} className="border-t border-gray-100">
+                  <td className="px-3 py-1.5 font-mono text-xs">{r.loop_type}</td>
                   <td className="px-3 py-1.5 text-right text-gray-700">{r.n}</td>
                   <td className="px-3 py-1.5">
                     {r.template ? (
@@ -489,7 +478,7 @@ export default function ClassificationEditor({ projectId, templates, functionKey
               ))}
               {filteredPreview.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-gray-400 text-sm">No matches.</td>
+                  <td colSpan={3} className="px-3 py-6 text-center text-gray-400 text-sm">No matches.</td>
                 </tr>
               )}
             </tbody>
