@@ -1,10 +1,8 @@
+// Drawings 허브 — 서브모듈 선택 페이지
 import { redirect } from 'next/navigation'
 import { createClient, getServerProjectId } from '@/lib/supabase-server'
+import Navbar from '@/components/Navbar'
 
-// IIS UI lands here in Step 2. For now: gate checks + placeholder.
-// Path-only redirects resolve against the request origin which, via shell's
-// multi-zone rewrite, is the shell host. basePath is not prepended by
-// Next.js server redirect() for origin-relative paths.
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -33,48 +31,38 @@ export default async function DashboardPage() {
 
   return (
     <div className="min-h-screen">
-      <header className="bg-white border-b border-gray-100 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-gray-400">GIDP / Drawings</div>
-            <div className="text-lg font-semibold text-[#000080]">Drawings</div>
-          </div>
-          <a
-            href="/"
-            className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 text-sm transition-colors"
-          >
-            ← GIDP
-          </a>
-        </div>
-      </header>
+      <Navbar />
 
       <main className="max-w-6xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-bold mb-2 text-[#000080]">Drawings</h1>
-        <p className="text-gray-500 text-sm mb-8">
-          IIS (Instrument Installation Schedule) 도구가 곧 추가됩니다. JB Wiring · Loop · Hook-up은 그 다음.
-        </p>
+        <h1 className="text-2xl font-bold mb-1 text-[#000080]">Drawings</h1>
+        <p className="text-gray-400 text-sm mb-8">서브모듈을 선택하세요.</p>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-6">
-          <div className="text-sm text-gray-500">project_id: <span className="font-mono text-gray-800">{projectId}</span></div>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <a
-              href="/drawings/iis/mapping"
-              className="inline-flex items-center gap-2 px-4 py-2 border border-[#000080] text-[#000080] rounded text-sm hover:bg-[#000080]/5"
-            >
-              IIS Column Mapping →
-            </a>
-            <a
-              href="/drawings/iis/classification"
-              className="inline-flex items-center gap-2 px-4 py-2 border border-[#000080] text-[#000080] rounded text-sm hover:bg-[#000080]/5"
-            >
-              IIS Classification Rules →
-            </a>
-            <a
-              href="/drawings/iis/generate"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[#000080] text-white rounded text-sm hover:bg-[#000060]"
-            >
-              IIS Generation →
-            </a>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* IIS */}
+          <a
+            href="/drawings/iis"
+            className="group block rounded-xl border border-gray-200 bg-white p-6 hover:border-[#000080] hover:shadow-sm transition-all"
+          >
+            <div className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Sub-module</div>
+            <div className="text-lg font-bold text-[#000080] mb-1">IIS</div>
+            <div className="text-sm text-gray-500">Instrument Installation Schedule — 태그별 IIS 시트 자동 생성</div>
+            <div className="mt-4 text-xs text-gray-400 group-hover:text-[#000080] transition-colors">열기 →</div>
+          </a>
+
+          {/* Wiring — coming soon */}
+          <div className="block rounded-xl border border-dashed border-gray-200 bg-gray-50 p-6 cursor-not-allowed">
+            <div className="text-xs font-semibold uppercase tracking-wider text-gray-300 mb-2">Sub-module</div>
+            <div className="text-lg font-bold text-gray-300 mb-1">Wiring</div>
+            <div className="text-sm text-gray-300">JB Wiring Diagram 자동 생성</div>
+            <div className="mt-4 text-xs text-gray-300">준비 중</div>
+          </div>
+
+          {/* Loop — coming soon */}
+          <div className="block rounded-xl border border-dashed border-gray-200 bg-gray-50 p-6 cursor-not-allowed">
+            <div className="text-xs font-semibold uppercase tracking-wider text-gray-300 mb-2">Sub-module</div>
+            <div className="text-lg font-bold text-gray-300 mb-1">Loop</div>
+            <div className="text-sm text-gray-300">Loop Diagram 자동 생성</div>
+            <div className="mt-4 text-xs text-gray-300">준비 중</div>
           </div>
         </div>
       </main>

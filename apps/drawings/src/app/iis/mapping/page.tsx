@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient, getServerProjectId } from '@/lib/supabase-server'
 import MappingEditor from './MappingEditor'
+import Navbar from '@/components/Navbar'
+import IisSubnav from '@/components/IisSubnav'
 
 interface TemplateLayout {
   template_code: string
@@ -48,28 +50,8 @@ export default async function IisMappingPage() {
 
   return (
     <div className="min-h-screen">
-      <header className="bg-white border-b border-gray-100 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-gray-400">GIDP / Drawings / IIS</div>
-            <div className="text-lg font-semibold text-[#000080]">Column Mapping</div>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <a href="/drawings/iis/classification" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-              Classification Rules
-            </a>
-            <a href="/drawings/iis/generate" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-              Generation
-            </a>
-            <a href="/drawings/dashboard" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-              ← Drawings
-            </a>
-            <a href="/" className="px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50">
-              GIDP Home
-            </a>
-          </div>
-        </div>
-      </header>
+      <Navbar />
+      <IisSubnav />
 
       <main className="max-w-6xl mx-auto px-6 py-6">
         <p className="text-sm text-gray-500 mb-6">
