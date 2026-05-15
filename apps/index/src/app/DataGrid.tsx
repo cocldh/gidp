@@ -367,6 +367,7 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
           resizable: true,
           sortable: true,
           filter: ExcelStyleFilter,
+          cellDataType: false,
           cellStyle: (params) => {
             const api = gridApiRef.current;
             if (!api || api.isDestroyed()) return { backgroundColor: "" };

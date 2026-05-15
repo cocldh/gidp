@@ -205,10 +205,16 @@ export default function UploadModal({ open, projectId, existingTagMap, onClose, 
       const toUpdate: { id: number; data: Record<string, unknown> }[] = [];
 
       for (const rawRow of rows) {
-        // 모든 string 셀의 앞뒤 공백 제거
+        // 앞뒤 공백 제거 + 순수 숫자 string → number coerce (선행 0 있는 값 제외)
         const row: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(rawRow)) {
-          row[k] = typeof v === "string" ? v.trim() : v;
+          if (typeof v === "string") {
+            const trimmed = v.trim();
+            const n = Number(trimmed);
+            row[k] = trimmed !== "" && !isNaN(n) && !/^0\d/.test(trimmed) ? n : trimmed;
+          } else {
+            row[k] = v;
+          }
         }
 
         const raw = row[tagField];
