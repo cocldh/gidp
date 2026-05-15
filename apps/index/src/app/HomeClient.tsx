@@ -3,11 +3,12 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import ExcelJS from "exceljs";
-import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home, Tag, X } from "lucide-react";
+import { Download, Upload, Columns, Loader2, Search, FilterX, Moon, Sun, Star, Trash2, Plus, History, Save, LogOut, FolderKanban, ArrowLeftRight, Home, Tag, X, ArrowUpDown } from "lucide-react";
 import type { ColDef, GridApi } from "ag-grid-community";
 import { RoleGuard, useUserRole } from "@gidp/ui";
 import { createClient } from "@/lib/supabase-client";
 import UploadModal from "./UploadModal";
+import SortModal, { type SortCondition } from "./SortModal";
 import AddTagPanel from "./AddTagPanel";
 
 const DataGrid = dynamic(() => import("./DataGrid"), { ssr: false });
@@ -69,6 +70,8 @@ function HomeContent({ projectId }: { projectId: number }) {
 
   const [showUpload, setShowUpload] = useState(false);
   const [uploadTagMap, setUploadTagMap] = useState<Map<string, number>>(new Map());
+  const [showSort, setShowSort] = useState(false);
+  const [activeSortConditions, setActiveSortConditions] = useState<SortCondition[]>([]);
   const [showAddTag, setShowAddTag] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveReason, setSaveReason] = useState("");
@@ -736,6 +739,19 @@ function HomeContent({ projectId }: { projectId: number }) {
             Clear Filters
           </button>
 
+          <button
+            onClick={() => setShowSort(true)}
+            className={`${btnBase} hover:border-blue-400 ${activeSortConditions.length > 0 ? "border-blue-400 text-blue-600 dark:text-blue-400" : ""}`}
+          >
+            <ArrowUpDown size={16} />
+            Sort
+            {activeSortConditions.length > 0 && (
+              <span className="bg-blue-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
+                {activeSortConditions.length}
+              </span>
+            )}
+          </button>
+
           <div className="relative" ref={panelRef}>
             <button onClick={() => setShowColumnPanel((v) => !v)} className={`${btnBase} hover:border-blue-400`}>
               <Columns size={16} />
@@ -1105,6 +1121,24 @@ function HomeContent({ projectId }: { projectId: number }) {
         existingTagMap={uploadTagMap}
         onClose={() => setShowUpload(false)}
         onUploadComplete={loadData}
+      />
+
+      <SortModal
+        open={showSort}
+        columns={columns.filter((c) => c.field !== "id").map((c) => c.field as string)}
+        initialConditions={activeSortConditions}
+        onApply={(conds) => {
+          setActiveSortConditions(conds);
+          gridApiRef.current?.applyColumnState({
+            state: conds.map((c, i) => ({ colId: c.colId, sort: c.direction, sortIndex: i })),
+            defaultState: { sort: null },
+          });
+        }}
+        onClear={() => {
+          setActiveSortConditions([]);
+          gridApiRef.current?.applyColumnState({ defaultState: { sort: null } });
+        }}
+        onClose={() => setShowSort(false)}
       />
       <AddTagPanel
         open={showAddTag}
