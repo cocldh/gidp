@@ -14,6 +14,7 @@ interface DataGridProps {
   onCellValueChanged: (event: any) => void;
   onGridReady?: (api: GridApi) => void;
   isChangedCell: (recordId: number, colName: string) => boolean;
+  isPendingCell: (recordId: number, colName: string) => boolean;
   getChangedCellTooltip: (recordId: number, colName: string) => string | undefined;
   onUndo: () => void;
 }
@@ -41,7 +42,7 @@ function rangeKeys(sel: RangeSel): Set<string> {
 }
 
 
-export default function DataGrid({ columns, rowData, totalRows, onCellValueChanged, onGridReady, isChangedCell, getChangedCellTooltip, onUndo }: DataGridProps) {
+export default function DataGrid({ columns, rowData, totalRows, onCellValueChanged, onGridReady, isChangedCell, isPendingCell, getChangedCellTooltip, onUndo }: DataGridProps) {
   // "All" shows up as the exact row count — AG Grid Community's selector only supports numeric options.
   const pageSizeOptions = useMemo(() => {
     const opts: number[] = [100, 500, 1000, 5000];
@@ -150,6 +151,10 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
       if (!api) return;
 
       if (e.ctrlKey && !e.shiftKey && e.key === "z") {
+        // INPUT/TEXTAREA에 타이핑 중이면 브라우저 텍스트 undo에 양보
+        const active = document.activeElement;
+        const isTyping = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+        if (isTyping) return;
         e.preventDefault(); e.stopPropagation(); onUndo(); return;
       }
 
@@ -369,10 +374,13 @@ export default function DataGrid({ columns, rowData, totalRows, onCellValueChang
             const allCols = api.getAllDisplayedColumns() ?? [];
             const colIdx = allCols.findIndex((c) => c.getColId() === params.column.getColId());
             if (selectedCellsRef.current.has(cellKey(rowIdx, colIdx))) {
-              return { backgroundColor: "#bfdbfe" };
+              return { backgroundColor: "#bfdbfe" }; // 선택: 파란색
+            }
+            if (params.colDef.field !== "id" && isPendingCell(params.data?.id, params.colDef.field as string)) {
+              return { backgroundColor: "#fed7aa" }; // 미저장 수정: 주황색
             }
             if (params.colDef.field !== "id" && isChangedCell(params.data?.id, params.colDef.field as string)) {
-              return { backgroundColor: "#fde68a" };
+              return { backgroundColor: "#fde68a" }; // 저장됨(미커밋): 노란색
             }
             // null 대신 "" 반환 — AG Grid는 null 시 이전 인라인 스타일을 지우지 않음
             return { backgroundColor: "" };

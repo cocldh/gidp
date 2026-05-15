@@ -384,6 +384,7 @@ function HomeContent({ projectId }: { projectId: number }) {
       existing.currentValue = newValue;
     }
     setPendingCount(pendingChanges.current.size);
+    gridApiRef.current?.refreshCells({ force: true });
   };
 
   const handleUndo = useCallback(() => {
@@ -403,6 +404,7 @@ function HomeContent({ projectId }: { projectId: number }) {
 
     isUndoing.current = true;
     last.rowNode.setDataValue(last.fieldName, last.oldValue);
+    gridApiRef.current?.refreshCells({ force: true });
   }, []);
 
   const saveChanges = async (reason: string) => {
@@ -1040,6 +1042,7 @@ function HomeContent({ projectId }: { projectId: number }) {
               gridApiRef.current = api;
             }}
             isChangedCell={(recordId, colName) => changedCellsRef.current.has(`${recordId}_${colName}`)}
+            isPendingCell={(recordId, colName) => pendingChanges.current.has(`${recordId}_${colName}`)}
             getChangedCellTooltip={(recordId, colName) => {
               const info = changedCellsInfoRef.current.get(`${recordId}_${colName}`);
               if (!info) return undefined;
