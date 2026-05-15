@@ -68,6 +68,7 @@ function HomeContent({ projectId }: { projectId: number }) {
   const [showSaveInput, setShowSaveInput] = useState(false);
 
   const [showUpload, setShowUpload] = useState(false);
+  const [uploadTagMap, setUploadTagMap] = useState<Map<string, number>>(new Map());
   const [showAddTag, setShowAddTag] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveReason, setSaveReason] = useState("");
@@ -972,7 +973,21 @@ function HomeContent({ projectId }: { projectId: number }) {
           </button>
 
           {isProjectRole("ProjectAdmin") && (
-            <button onClick={() => setShowUpload(true)} className={`${btnBase} hover:border-blue-400`}>
+            <button
+              onClick={() => {
+                const TAG_COL = "1_TAG NUMBER";
+                const map = new Map<string, number>();
+                gridApiRef.current?.forEachNode((node) => {
+                  const tag = node.data?.[TAG_COL];
+                  const id = node.data?.id;
+                  if (tag != null && id != null && String(tag).trim() !== "")
+                    map.set(String(tag).trim(), id as number);
+                });
+                setUploadTagMap(map);
+                setShowUpload(true);
+              }}
+              className={`${btnBase} hover:border-blue-400`}
+            >
               <Upload size={16} />
               Upload
             </button>
@@ -1087,6 +1102,7 @@ function HomeContent({ projectId }: { projectId: number }) {
       <UploadModal
         open={showUpload}
         projectId={projectId}
+        existingTagMap={uploadTagMap}
         onClose={() => setShowUpload(false)}
         onUploadComplete={loadData}
       />
